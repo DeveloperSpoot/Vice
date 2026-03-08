@@ -802,6 +802,7 @@
       transition: transform .12s;
     }
     .hl-marker:hover { transform: translate(-50%,-50%) scale(1.45); }
+    .hl-marker.dragging { transform: translate(-50%,-50%) scale(1.35); box-shadow: 0 0 0 2px rgba(255,255,255,.15); }
 
     /* Highlight list */
     .viewer-hl-list { display: flex; flex-direction: column; gap: 3px; max-height: 136px; overflow-y: auto; }
@@ -1981,6 +1982,19 @@ function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/'/g,'&#39;
 let viewerSlug       = null;
 let viewerIdx        = -1;
 let viewerHighlights = [];
+let draggingHighlight = null;
+
+function seekViewerTo(seconds) {
+  const vid = document.getElementById('viewer-video');
+  if (!vid) return;
+  const target = Math.max(0, Number(seconds) || 0);
+  try {
+    if (typeof vid.fastSeek === 'function') vid.fastSeek(target);
+    else vid.currentTime = target;
+  } catch (_) {
+    vid.currentTime = target;
+  }
+}
 
 function seekViewerTo(seconds) {
   const vid = document.getElementById('viewer-video');
@@ -2108,8 +2122,9 @@ function renderViewerHighlights() {
     m.className  = 'hl-marker';
     m.style.left = pct + '%';
     m.style.background = color;
-    m.title      = `${hl.label} — ${fmtSec(hl.time, true)}`;
-    m.onclick    = ev => { ev.stopPropagation(); seekViewerTo(hl.time); };
+    m.title      = `${hl.label} — ${fmtSec(hl.time, true)} (drag to move)`;
+    m.onpointerdown = ev => beginHighlightDrag(ev, hl, m);
+    m.onclick    = ev => { if (!draggingHighlight) { ev.stopPropagation(); seekViewerTo(hl.time); } };
     markersEl.appendChild(m);
   });
 
@@ -2164,6 +2179,76 @@ function renderViewerHighlights() {
     listEl.appendChild(item);
   });
   lucide.createIcons();
+}
+
+function dragTimeFromPointer(ev) {
+  const vid = document.getElementById('viewer-video');
+  const tl  = document.getElementById('viewer-timeline');
+  if (!vid || !tl || !vid.duration) return null;
+  const rect = tl.getBoundingClientRect();
+  const x = Math.max(rect.left, Math.min(rect.right, ev.clientX));
+  const ratio = Math.max(0, Math.min(1, (x - rect.left) / rect.width));
+  return ratio * vid.duration;
+}
+
+function beginHighlightDrag(ev, hl, markerEl) {
+  if (ev.button !== undefined && ev.button !== 0) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const t = dragTimeFromPointer(ev);
+  draggingHighlight = { id: hl.id, markerEl, startTime: hl.time, time: t ?? hl.time };
+  markerEl.classList.add('dragging');
+
+  const onMove = moveEv => {
+    if (!draggingHighlight) return;
+    const next = dragTimeFromPointer(moveEv);
+    if (next == null) return;
+    draggingHighlight.time = next;
+    const item = viewerHighlights.find(h => h.id === draggingHighlight.id);
+    if (item) {
+      item.time = Number(next.toFixed(3));
+      viewerHighlights.sort((a, b) => a.time - b.time);
+      renderViewerHighlights();
+    }
+  };
+
+  const onUp = async upEv => {
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', onUp, true);
+    window.removeEventListener('pointercancel', onUp, true);
+
+    const cur = draggingHighlight;
+    draggingHighlight = null;
+    if (cur?.markerEl) cur.markerEl.classList.remove('dragging');
+
+    if (!cur) return;
+    const finalTime = dragTimeFromPointer(upEv);
+    const applied = Number((finalTime ?? cur.time).toFixed(3));
+    const item = viewerHighlights.find(h => h.id === cur.id);
+    if (item) item.time = applied;
+    viewerHighlights.sort((a, b) => a.time - b.time);
+    renderViewerHighlights();
+
+    if (!viewerSlug) return;
+    try {
+      await fetch(`/api/clips/${viewerSlug}/highlights/${cur.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time: applied }),
+      });
+      toast(`Highlight moved to ${fmtSec(applied, true)}`, 'ok');
+    } catch (_) {
+      const old = viewerHighlights.find(h => h.id === cur.id);
+      if (old) old.time = cur.startTime;
+      viewerHighlights.sort((a, b) => a.time - b.time);
+      renderViewerHighlights();
+      toast('Failed to move highlight', 'err');
+    }
+  };
+
+  window.addEventListener('pointermove', onMove, true);
+  window.addEventListener('pointerup', onUp, true);
+  window.addEventListener('pointercancel', onUp, true);
 }
 
 function showColorPicker(hlId, currentColor, anchorEl) {

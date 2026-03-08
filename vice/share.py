@@ -510,6 +510,12 @@ class ShareServer:
                     h["label"] = (body["label"] or "Highlight").strip() or "Highlight"
                 if "color" in body:
                     h["color"] = body["color"]
+                if "time" in body:
+                    try:
+                        h["time"] = round(max(0.0, float(body["time"])), 3)
+                    except (TypeError, ValueError):
+                        pass
+                hl.sort(key=lambda x: float(x.get("time", 0)))
                 _save_highlights(slug, hl)
                 return web.json_response({"ok": True})
         return web.json_response({"ok": False, "error": "highlight not found"})
