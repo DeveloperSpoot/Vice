@@ -1996,6 +1996,18 @@ function seekViewerTo(seconds) {
   }
 }
 
+function seekViewerTo(seconds) {
+  const vid = document.getElementById('viewer-video');
+  if (!vid) return;
+  const target = Math.max(0, Number(seconds) || 0);
+  try {
+    if (typeof vid.fastSeek === 'function') vid.fastSeek(target);
+    else vid.currentTime = target;
+  } catch (_) {
+    vid.currentTime = target;
+  }
+}
+
 function openViewer(slug) {
   const idx = clips.findIndex(c => c.slug === slug);
   if (idx < 0) return;
