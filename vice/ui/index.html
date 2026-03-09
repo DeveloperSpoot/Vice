@@ -1599,6 +1599,44 @@ async function fetchClips() {
   }
 }
 
+
+let activePreviewVideo = null;
+
+function stopActivePreview(resetTime = true) {
+  if (!activePreviewVideo) return;
+  try {
+    activePreviewVideo.pause();
+    if (resetTime) activePreviewVideo.currentTime = 0;
+  } catch (_) {}
+  activePreviewVideo = null;
+}
+
+function startPreview(slug) {
+  const card = document.getElementById('card-' + slug);
+  if (!card) return;
+  const vid = card.querySelector('video.preview-video');
+  if (!vid) return;
+
+  if (activePreviewVideo && activePreviewVideo !== vid) {
+    stopActivePreview(true);
+  }
+
+  activePreviewVideo = vid;
+  const maybe = vid.play();
+  if (maybe && typeof maybe.catch === 'function') maybe.catch(() => {});
+}
+
+function stopPreview(slug) {
+  const card = document.getElementById('card-' + slug);
+  const vid = card?.querySelector('video.preview-video');
+  if (!vid) return;
+  try {
+    vid.pause();
+    vid.currentTime = 0;
+  } catch (_) {}
+  if (activePreviewVideo === vid) activePreviewVideo = null;
+}
+
 function renderClips() {
   const grid  = document.getElementById('clips-grid');
   const empty = document.getElementById('clips-empty');
@@ -1608,6 +1646,7 @@ function renderClips() {
   sub.textContent = n === 0 ? 'No clips saved yet' : `${n} clip${n !== 1 ? 's' : ''}`;
   empty.style.display = n === 0 ? 'block' : 'none';
 
+  stopActivePreview(true);
   grid.innerHTML = clips.map(c => cardHTML(c)).join('');
   lucide.createIcons();
 }
@@ -1623,11 +1662,10 @@ function cardHTML(c) {
 
   return `
   <div class="clip-card" id="card-${escAttr(c.slug)}">
-    <div class="thumb-wrap" onclick="openViewer('${escAttr(c.slug)}')" style="cursor:pointer">
+    <div class="thumb-wrap" onclick="openViewer('${escAttr(c.slug)}')" onmouseenter="startPreview('${escAttr(c.slug)}')" onmouseleave="stopPreview('${escAttr(c.slug)}')" style="cursor:pointer">
       ${c.thumb_url
         ? `<img src="${c.thumb_url}" loading="lazy" alt="">
-           <video src="${c.video_url}" muted loop preload="none"
-                  onmouseenter="this.play()" onmouseleave="this.pause();this.currentTime=0"></video>`
+           <video class="preview-video" src="${c.video_url}" muted loop playsinline preload="none"></video>`
         : `<div class="thumb-placeholder"><svg data-lucide="film" width="24" height="24"></svg></div>`}
       ${durStr ? `<span class="clip-dur-badge">${durStr}</span>` : ''}
       ${isNew  ? `<span class="clip-new-badge">NEW</span>`       : ''}
@@ -1997,6 +2035,7 @@ function seekViewerTo(seconds) {
 }
 
 function openViewer(slug) {
+  stopActivePreview(true);
   const idx = clips.findIndex(c => c.slug === slug);
   if (idx < 0) return;
   viewerSlug = slug;
@@ -2032,6 +2071,7 @@ function openViewer(slug) {
 }
 
 function closeViewer() {
+  stopActivePreview(true);
   document.getElementById('viewer-modal').classList.remove('open');
   const vid = document.getElementById('viewer-video');
   vid.pause(); vid.src = '';
