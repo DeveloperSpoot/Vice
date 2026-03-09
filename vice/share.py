@@ -307,9 +307,12 @@ class ShareServer:
         try:
             st = path.stat()
             size = st.st_size
+            mtime_ns = st.st_mtime_ns
             created_at = datetime.fromtimestamp(st.st_mtime).isoformat()
         except OSError:
-            size, created_at = 0, ""
+            size, mtime_ns, created_at = 0, 0, ""
+
+        thumb_rev = f"{size}-{mtime_ns}"
         return {
             "slug":       slug,
             "name":       path.name,
@@ -322,7 +325,8 @@ class ShareServer:
             # so the app UI never fetches video through an external tunnel.
             "share_url":  f"{public_base}/c/{slug}",
             "video_url":  f"/v/{slug}",
-            "thumb_url":  f"/t/{slug}",
+            # Cache-bust by clip file identity to avoid stale thumbs when slugs are reused.
+            "thumb_url":  f"/t/{slug}?v={thumb_rev}",
         }
 
     # ── route handlers ────────────────────────────────────────────────────────
