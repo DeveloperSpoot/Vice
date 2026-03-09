@@ -1,5 +1,4 @@
 
-```markdown
 <p align="center">
   <img src="assets/vice.svg" width="96" alt="Vice icon"/>
 </p>
