@@ -22,7 +22,8 @@
       --accent:       #3b82f6;
       --accent-hi:    #60a5fa;
       --accent-dim:   rgba(59,130,246,0.13);
-      --accent-glow:  0 0 28px rgba(59,130,246,0.20);
+      --accent-glow:  0 0 28px rgba(var(--accent-rgb),0.20);
+      --accent-rgb:   59,130,246;
       --text:         #e1e7f0;
       --muted:        #5a6b82;
       --muted-hi:     #8899b0;
@@ -161,14 +162,14 @@
     .tunnel-pill {
       display: none; align-items: center; gap: 5px;
       padding: 5px 9px; border-radius: 20px;
-      background: rgba(59,130,246,0.12);
-      border: 1px solid rgba(59,130,246,0.2);
+      background: rgba(var(--accent-rgb),0.12);
+      border: 1px solid rgba(var(--accent-rgb),0.2);
       font-size: 11px; font-weight: 500; color: var(--accent);
       cursor: pointer; transition: background .12s;
       overflow: hidden;
     }
     .tunnel-pill.visible { display: flex; }
-    .tunnel-pill:hover { background: rgba(59,130,246,0.2); }
+    .tunnel-pill:hover { background: rgba(var(--accent-rgb),0.2); }
     .tunnel-pill svg { width: 11px; height: 11px; flex-shrink: 0; }
     .tunnel-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -199,11 +200,11 @@
     .btn svg { width: 13px; height: 13px; }
     .btn-primary {
       background: var(--accent); color: #fff;
-      box-shadow: 0 2px 10px rgba(59,130,246,0.3);
+      box-shadow: 0 2px 10px rgba(var(--accent-rgb),0.3);
     }
     .btn-primary:hover {
       background: var(--accent-hi);
-      box-shadow: 0 4px 14px rgba(59,130,246,0.4);
+      box-shadow: 0 4px 14px rgba(var(--accent-rgb),0.4);
     }
     .btn-ghost { background: rgba(255,255,255,0.06); color: var(--text); border: 1px solid var(--border); }
     .btn-ghost:hover { background: rgba(255,255,255,0.10); border-color: var(--border-hi); }
@@ -242,7 +243,7 @@
       transition: border-color .16s, transform .16s, box-shadow .16s;
     }
     .clip-card:hover {
-      border-color: rgba(59,130,246,.28);
+      border-color: rgba(var(--accent-rgb),.28);
       transform: translateY(-2px);
       box-shadow: 0 10px 30px rgba(0,0,0,.5), var(--accent-glow);
     }
@@ -301,7 +302,7 @@
       color: var(--text);
       font: inherit; font-size: 13px; font-weight: 600;
       padding: 2px 7px; outline: none;
-      box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+      box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.12);
     }
 
     /* ── Settings ───────────────────────────────────────────────────── */
@@ -344,7 +345,7 @@
     }
     select:focus, input:focus {
       border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+      box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.12);
     }
     select {
       cursor: pointer; padding-right: 28px; appearance: none;
@@ -366,7 +367,7 @@
       -webkit-appearance: none;
       width: 14px; height: 14px; border-radius: 50%;
       background: var(--accent); cursor: pointer;
-      box-shadow: 0 0 8px rgba(59,130,246,.5);
+      box-shadow: 0 0 8px rgba(var(--accent-rgb),.5);
       transition: transform .1s;
     }
     input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
@@ -664,7 +665,7 @@
     }
     .tl-selection {
       position: absolute; top: 0; bottom: 0;
-      background: rgba(59,130,246,.14);
+      background: rgba(var(--accent-rgb),.14);
       border-top: 2px solid var(--accent);
       border-bottom: 2px solid var(--accent);
       pointer-events: none;
@@ -676,7 +677,7 @@
       background: var(--accent);
       border-radius: 4px;
       cursor: ew-resize; z-index: 3;
-      box-shadow: 0 2px 12px rgba(59,130,246,.55);
+      box-shadow: 0 2px 12px rgba(var(--accent-rgb),.55);
       display: flex; align-items: center; justify-content: center;
       transition: transform .1s;
     }
@@ -788,7 +789,7 @@
       background: var(--accent); border: 2px solid #fff;
       border-radius: 50%; transform: translate(-50%, -50%);
       pointer-events: none; z-index: 3;
-      box-shadow: 0 0 8px rgba(59,130,246,.5);
+      box-shadow: 0 0 8px rgba(var(--accent-rgb),.5);
     }
     #viewer-hl-markers { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
     .hl-marker {
@@ -870,6 +871,9 @@
       width: 3px; background: #f59e0b;
       transform: translateX(-50%); pointer-events: none;
       opacity: 0.8; z-index: 2;
+    }
+      @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
     }
   </style>
 </head>
@@ -1337,11 +1341,11 @@
 // Theme system
 // ═══════════════════════════════════════════════════════════════════
 const THEMES = {
-  blue:   { '--accent': '#3b82f6', '--accent-hi': '#60a5fa', '--accent-dim': 'rgba(59,130,246,0.13)',  '--accent-glow': '0 0 28px rgba(59,130,246,0.20)'  },
-  purple: { '--accent': '#8b5cf6', '--accent-hi': '#a78bfa', '--accent-dim': 'rgba(139,92,246,0.13)',  '--accent-glow': '0 0 28px rgba(139,92,246,0.20)'  },
-  green:  { '--accent': '#10b981', '--accent-hi': '#34d399', '--accent-dim': 'rgba(16,185,129,0.13)',  '--accent-glow': '0 0 28px rgba(16,185,129,0.20)'  },
-  red:    { '--accent': '#ef4444', '--accent-hi': '#f87171', '--accent-dim': 'rgba(239,68,68,0.13)',   '--accent-glow': '0 0 28px rgba(239,68,68,0.20)'   },
-  orange: { '--accent': '#f97316', '--accent-hi': '#fb923c', '--accent-dim': 'rgba(249,115,22,0.13)',  '--accent-glow': '0 0 28px rgba(249,115,22,0.20)'  },
+  blue:   { '--accent': '#3b82f6', '--accent-hi': '#60a5fa', '--accent-rgb': '59,130,246',  '--accent-dim': 'rgba(59,130,246,0.13)',  '--accent-glow': '0 0 28px rgba(59,130,246,0.20)'  },
+  purple: { '--accent': '#8b5cf6', '--accent-hi': '#a78bfa', '--accent-rgb': '139,92,246',  '--accent-dim': 'rgba(139,92,246,0.13)',  '--accent-glow': '0 0 28px rgba(139,92,246,0.20)'  },
+  green:  { '--accent': '#10b981', '--accent-hi': '#34d399', '--accent-rgb': '16,185,129',  '--accent-dim': 'rgba(16,185,129,0.13)',  '--accent-glow': '0 0 28px rgba(16,185,129,0.20)'  },
+  red:    { '--accent': '#ef4444', '--accent-hi': '#f87171', '--accent-rgb': '239,68,68',   '--accent-dim': 'rgba(239,68,68,0.13)',   '--accent-glow': '0 0 28px rgba(239,68,68,0.20)'   },
+  orange: { '--accent': '#f97316', '--accent-hi': '#fb923c', '--accent-rgb': '249,115,22',  '--accent-dim': 'rgba(249,115,22,0.13)',  '--accent-glow': '0 0 28px rgba(249,115,22,0.20)'  },
 };
 
 function setTheme(name) {
