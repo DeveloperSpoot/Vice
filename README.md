@@ -10,6 +10,8 @@ Press a hotkey — instantly save the last 15 seconds of gameplay.
 
 Website: https://viceclipper.framer.website/
 
+Vice is actively maintained. Bug reports and PR requests are welcome.
+
 ---
 
 ## Installation
