@@ -16,6 +16,7 @@ Commands:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import asdict
@@ -150,6 +151,9 @@ class ViceDaemon:
             return False
 
         old_recorder = self.recorder
+        # Snapshot config before live-apply mutates recorder behavior.
+        old_cfg = copy.deepcopy(self.cfg)
+
         new_recorder = create_recorder(self.cfg)
         new_recorder.on_clip_saved(self._on_clip_saved)
 
@@ -157,6 +161,10 @@ class ViceDaemon:
         try:
             await new_recorder.start()
         except Exception:
+            # Restore old config on the current recorder object before restart.
+            for field in ("recording", "hotkeys", "output", "sharing"):
+                setattr(self.cfg, field, getattr(old_cfg, field))
+
             # Try to restore the previous recorder so capture keeps running.
             try:
                 await old_recorder.start()
@@ -395,8 +403,17 @@ def start(debug: bool, open_ui: bool) -> None:
     )
 
     if SOCKET_FILE.exists():
-        click.echo("Vice is already running. Use `vice stop` or `vice status`.", err=True)
-        sys.exit(1)
+        resp = asyncio.run(_ipc("status", timeout=1.5))
+        if resp is not None:
+            click.echo("Vice is already running. Use `vice stop` or `vice status`.", err=True)
+            sys.exit(1)
+
+        log.warning("Found stale IPC socket at %s, removing it", SOCKET_FILE)
+        try:
+            SOCKET_FILE.unlink()
+        except OSError as exc:
+            click.echo(f"Found stale socket at {SOCKET_FILE}, but could not remove it: {exc}", err=True)
+            sys.exit(1)
 
     daemon = ViceDaemon()
 
