@@ -1558,8 +1558,6 @@ let ws        = null;
 let recentNew = new Set();
 let tunnelUrl = null;
 let hotkeysAvailable = true;
-let _lastSavedGsrArgs = null;
-let _lastRestartPromptedGsrArgs = null;
 
 // Trim state
 let trimSlug  = null;
@@ -1859,13 +1857,6 @@ function copyRestartCmd() {
     .catch(() => toast('Could not copy command', 'err'));
 }
 
-function maybeShowGsrRestartPrompt(prevArgs, savedArgs) {
-  const backend = document.getElementById('s-backend')?.value || (cfg.recording?.backend ?? 'auto');
-  if (!savedArgs || savedArgs === prevArgs || savedArgs === _lastRestartPromptedGsrArgs) return;
-  if (backend !== 'gsr' && backend !== 'auto') return;
-  _lastRestartPromptedGsrArgs = savedArgs;
-  showRestartModal();
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // Settings
@@ -1900,7 +1891,6 @@ function populateSettings(c) {
   pick('s-backend', r.backend        ?? 'auto');
   document.getElementById('s-audio').checked = r.capture_audio !== false;
   document.getElementById('s-gsr-args').value = r.gsr_args ?? '';
-  _lastSavedGsrArgs = (r.gsr_args ?? '').trim();
   const clipKey = h.clip ?? 'KEY_F9';
   document.getElementById('s-key').value = clipKey;
   document.getElementById('s-key-btn').textContent = clipKey;
@@ -1934,7 +1924,11 @@ async function saveSettings() {
     },
   };
   try {
-    const prevGsrArgs = _lastSavedGsrArgs;
+    const currentSharing = cfg.sharing || {};
+    const sharingChanged =
+      Number(body.sharing.port) !== Number(currentSharing.port ?? 8765)
+      || Boolean(body.sharing.cloudflare_tunnel) !== Boolean(currentSharing.cloudflare_tunnel !== false);
+
     const resp = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1944,14 +1938,13 @@ async function saveSettings() {
     if (!resp.ok || data.ok === false) {
       throw new Error(data.error || 'save failed');
     }
-    _lastSavedGsrArgs = document.getElementById('s-gsr-args').value.trim();
     if (data.applied === false && data.warning) {
       toast(data.warning, 'err');
     }
-    if (data.restart_required) {
+    // Only show restart popup for sharing-level changes.
+    if (data.restart_required && sharingChanged) {
       showRestartModal();
     }
-    maybeShowGsrRestartPrompt(prevGsrArgs, _lastSavedGsrArgs);
     const el = document.getElementById('saved-msg');
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 2400);
