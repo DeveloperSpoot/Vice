@@ -648,13 +648,24 @@ class GSRRecorder(Recorder):
     async def stop(self) -> None:
         self._running = False
         if self._proc:
+            proc = self._proc
+            self._proc = None
             try:
-                self._proc.terminate()
-                await asyncio.wait_for(self._proc.wait(), timeout=5)
-            except Exception:
-                self._proc.kill()
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
+                pass
+            except Exception as exc:
+                log.warning("Error while stopping GSR process: %s", exc)
         if self._watch_task:
             self._watch_task.cancel()
+            self._watch_task = None
 
     async def save_clip(self) -> Optional[Path]:
         if not self._proc or self._proc.returncode is not None:
@@ -798,13 +809,24 @@ class SegmentRecorder(Recorder):
     async def stop(self) -> None:
         self._running = False
         if self._current_proc:
+            proc = self._current_proc
+            self._current_proc = None
             try:
-                self._current_proc.terminate()
-                await asyncio.wait_for(self._current_proc.wait(), timeout=5)
-            except Exception:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
                 pass
+            except Exception as exc:
+                log.warning("Error while stopping segment recorder process: %s", exc)
         if self._loop_task:
             self._loop_task.cancel()
+            self._loop_task = None
 
     async def _record_loop(self) -> None:
         while self._running:
@@ -839,10 +861,16 @@ class SegmentRecorder(Recorder):
                     try:
                         await asyncio.wait_for(self._current_proc.wait(), timeout=3)
                     except asyncio.TimeoutError:
-                        self._current_proc.kill()
+                        try:
+                            self._current_proc.kill()
+                        except ProcessLookupError:
+                            pass
             except asyncio.CancelledError:
                 if self._current_proc:
-                    self._current_proc.terminate()
+                    try:
+                        self._current_proc.terminate()
+                    except ProcessLookupError:
+                        pass
                 return
             except Exception as exc:
                 log.error("Recorder error: %s", exc)
