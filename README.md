@@ -210,6 +210,10 @@ base_url          = "https://clips.example.com"   # optional public share origin
 > Vice now keeps the control UI local-only on `127.0.0.1` and exposes a separate public share server for clip links.
 > If you use a reverse proxy, point it at `sharing.public_port`, not `sharing.port`.
 
+**Vice fails only from a manual `systemd --user` service**
+> Do not use shell syntax like `Environment=HOME=${HOME}` or `Environment=XDG_RUNTIME_DIR=/run/user/$(id -u)` in the unit file.
+> `systemd` does not evaluate those expressions there. Use concrete values or omit those overrides entirely.
+
 ### Uninstall
 
 **AUR:**

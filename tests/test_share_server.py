@@ -5,10 +5,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from aiohttp import ClientSession
-
+from vice import __version__
 from vice.config import Config, OutputConfig, SharingConfig
-from vice.share import ShareServer
+
+try:
+    from aiohttp import ClientSession
+    from vice.share import ShareServer
+except ModuleNotFoundError:
+    ClientSession = None
+    ShareServer = None
 
 
 def _free_port() -> int:
@@ -21,6 +26,7 @@ async def _stub_ffprobe(_: Path) -> dict:
     return {"width": 1920, "height": 1080, "duration": 4.2}
 
 
+@unittest.skipUnless(ShareServer is not None and ClientSession is not None, "aiohttp is not installed")
 class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -148,6 +154,7 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.clip_path.exists())
 
 
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class ShareServerBaseUrlTests(unittest.TestCase):
     def test_configured_public_base_url_beats_tunnel_and_bind_url(self) -> None:
         cfg = Config(
@@ -165,6 +172,23 @@ class ShareServerBaseUrlTests(unittest.TestCase):
         self.assertEqual(server.public_base_url(), "https://clips.example.com")
 
 
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class ShareServerUiVersionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ui_response_injects_current_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ui_path = Path(tmp) / "index.html"
+            ui_path.write_text("<div>Version __VICE_VERSION__</div>", encoding="utf-8")
+            server = ShareServer(Config())
+
+            with mock.patch("vice.share._resolve_ui_index", return_value=ui_path):
+                response = await server._ui(mock.Mock())
+
+        self.assertEqual(response.status, 200)
+        self.assertIn(__version__, response.text)
+        self.assertNotIn("__VICE_VERSION__", response.text)
+
+
+@unittest.skipUnless(ShareServer is not None and ClientSession is not None, "aiohttp is not installed")
 class ShareServerLegacyUrlCompatibilityTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()

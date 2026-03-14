@@ -34,6 +34,7 @@ from . import __version__
 from .config import load as load_config, save as save_config, CONFIG_PATH, CONFIG_DIR
 from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .recorder import create_recorder
+from .runtime import actual_home_dir, normalize_runtime_environment, resolve_path
 from .share import ShareServer
 from . import audio
 
@@ -41,6 +42,19 @@ log = logging.getLogger("vice")
 
 PID_FILE    = Path("/tmp/vice/vice.pid")
 SOCKET_FILE = Path("/tmp/vice/vice.sock")
+USER_BIN_DIR = actual_home_dir() / ".local" / "bin"
+INSTALL_VENV_DIR = actual_home_dir() / ".local" / "share" / "vice" / "venv"
+USER_DESKTOP_FILE = actual_home_dir() / ".local" / "share" / "applications" / "vice.desktop"
+USER_ICON_FILE = (
+    actual_home_dir()
+    / ".local"
+    / "share"
+    / "icons"
+    / "hicolor"
+    / "scalable"
+    / "apps"
+    / "vice.svg"
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -66,7 +80,7 @@ class ViceDaemon:
 
     async def run(self) -> None:
         Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
-        Path(self.cfg.output.directory).mkdir(parents=True, exist_ok=True)
+        resolve_path(self.cfg.output.directory).mkdir(parents=True, exist_ok=True)
 
         # Share server (web UI + REST API + WebSocket)
         if self.cfg.sharing.enabled:
@@ -402,6 +416,81 @@ async def _ipc(command: str, timeout: float = 5.0) -> Optional[str]:
         return None
 
 
+def _vice_command_path() -> Optional[Path]:
+    exe = shutil.which("vice")
+    if not exe:
+        return None
+    try:
+        return Path(exe).resolve()
+    except OSError:
+        return Path(exe)
+
+
+def _installed_via_aur() -> bool:
+    pacman = shutil.which("pacman")
+    vice_path = _vice_command_path()
+    if not pacman or not vice_path:
+        return False
+
+    query = subprocess.run(
+        [pacman, "-Q", "vice-clipper"],
+        capture_output=True,
+        text=True,
+    )
+    if query.returncode != 0:
+        return False
+
+    owner = subprocess.run(
+        [pacman, "-Qo", str(vice_path)],
+        capture_output=True,
+        text=True,
+    )
+    if owner.returncode != 0:
+        return False
+    return "vice-clipper" in owner.stdout
+
+
+def _using_install_script_venv() -> bool:
+    for name in ("vice", "vice-app"):
+        cmd = USER_BIN_DIR / name
+        if not cmd.exists():
+            continue
+        try:
+            resolved = cmd.resolve()
+        except OSError:
+            continue
+        if INSTALL_VENV_DIR == resolved or INSTALL_VENV_DIR in resolved.parents:
+            return True
+    return INSTALL_VENV_DIR.exists()
+
+
+def _remove_local_install_artifacts() -> list[Path]:
+    removed: list[Path] = []
+    for path in (
+        USER_BIN_DIR / "vice",
+        USER_BIN_DIR / "vice-app",
+        USER_DESKTOP_FILE,
+        USER_ICON_FILE,
+    ):
+        if not path.exists() and not path.is_symlink():
+            continue
+        path.unlink(missing_ok=True)
+        removed.append(path)
+    return removed
+
+
+def _refresh_desktop_caches() -> None:
+    commands = [
+        ["update-desktop-database", str(USER_DESKTOP_FILE.parent)],
+        ["gtk-update-icon-cache", "-f", "-t", str(USER_ICON_FILE.parents[2])],
+    ]
+    for cmd in commands:
+        exe = shutil.which(cmd[0])
+        if not exe:
+            continue
+        subprocess.run([exe, *cmd[1:]], capture_output=True)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────────────────────────────────────
@@ -411,6 +500,7 @@ async def _ipc(command: str, timeout: float = 5.0) -> Optional[str]:
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """Vice — Linux game clip recorder (Medal.tv for Linux)."""
+    normalize_runtime_environment()
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
@@ -553,7 +643,7 @@ def list_keys(filt: str) -> None:
 def clips() -> None:
     """List saved clips in the output directory."""
     cfg = load_config()
-    out_dir = Path(cfg.output.directory)
+    out_dir = resolve_path(cfg.output.directory)
     if not out_dir.exists():
         click.echo("No clips directory found.")
         return
@@ -572,13 +662,18 @@ def uninstall(yes: bool) -> None:
     """Remove Vice cleanly — config, service, and optionally clips."""
     click.echo("Vice uninstaller\n")
 
+    if _installed_via_aur():
+        click.echo("Vice was installed via AUR.")
+        click.echo("Run: yay -Rns vice-clipper")
+        return
+
     # 1. Stop daemon
     if SOCKET_FILE.exists():
         click.echo("Stopping daemon…")
         asyncio.run(_ipc("stop"))
 
     # 2. Disable systemd user service
-    service = Path.home() / ".config" / "systemd" / "user" / "vice.service"
+    service = actual_home_dir() / ".config" / "systemd" / "user" / "vice.service"
     if service.exists():
         if yes or click.confirm("Disable and remove the systemd user service?", default=True):
             subprocess.run(
@@ -597,9 +692,9 @@ def uninstall(yes: bool) -> None:
     # 4. Offer to remove clips
     try:
         cfg = load_config() if CONFIG_PATH.exists() else None
-        clips_dir = Path(cfg.output.directory) if cfg else Path.home() / "Videos" / "Vice"
+        clips_dir = resolve_path(cfg.output.directory) if cfg else actual_home_dir() / "Videos" / "Vice"
     except Exception:
-        clips_dir = Path.home() / "Videos" / "Vice"
+        clips_dir = actual_home_dir() / "Videos" / "Vice"
 
     if clips_dir.exists():
         n = len(list(clips_dir.glob("*.mp4")))
@@ -609,8 +704,24 @@ def uninstall(yes: bool) -> None:
             shutil.rmtree(clips_dir)
             click.echo(f"  Deleted {n} clip(s).")
 
-    # 5. Uninstall the Python package
-    click.echo("\nUninstalling Python package…")
-    subprocess.run([sys.executable, "-m", "pip", "uninstall", "vice", "-y"])
+    using_venv = _using_install_script_venv()
+
+    # 5. Remove the Python package or the dedicated install.sh virtualenv
+    if using_venv:
+        click.echo("\nRemoving Vice virtual environment…")
+        shutil.rmtree(INSTALL_VENV_DIR, ignore_errors=True)
+        click.echo(f"  Removed {INSTALL_VENV_DIR}.")
+    else:
+        click.echo("\nUninstalling Python package…")
+        subprocess.run([sys.executable, "-m", "pip", "uninstall", "vice", "-y"])
+
+    removed = _remove_local_install_artifacts()
+    if using_venv and INSTALL_VENV_DIR not in removed:
+        removed.append(INSTALL_VENV_DIR)
+    if removed:
+        click.echo("\nRemoved local Vice install files:")
+        for path in removed:
+            click.echo(f"  {path}")
+        _refresh_desktop_caches()
 
     click.echo("\nVice has been removed. Goodbye!")

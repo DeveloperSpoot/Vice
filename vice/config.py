@@ -17,7 +17,9 @@ else:
 
 import tomli_w
 
-CONFIG_DIR = Path.home() / ".config" / "vice"
+from .runtime import actual_home_dir, resolve_path
+
+CONFIG_DIR = actual_home_dir() / ".config" / "vice"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 
 
@@ -58,7 +60,7 @@ class HotkeyConfig:
 
 @dataclass
 class OutputConfig:
-    directory: str = str(Path.home() / "Videos" / "Vice")
+    directory: str = str(actual_home_dir() / "Videos" / "Vice")
     filename_format: str = "vice_%Y%m%d_%H%M%S.mp4"
 
 
@@ -114,11 +116,13 @@ def load() -> Config:
 
     defaults = _nested_asdict(Config())
     merged = _merge(defaults, raw)
+    output = dict(merged.get("output", {}))
+    output["directory"] = str(resolve_path(output.get("directory", OutputConfig().directory)))
 
     return Config(
         recording=RecordingConfig(**merged.get("recording", {})),
         hotkeys=HotkeyConfig(**merged.get("hotkeys", {})),
-        output=OutputConfig(**merged.get("output", {})),
+        output=OutputConfig(**output),
         sharing=SharingConfig(**merged.get("sharing", {})),
     )
 

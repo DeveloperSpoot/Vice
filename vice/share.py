@@ -28,7 +28,11 @@ from importlib.resources import files as _pkg_files
 
 from aiohttp import WSMsgType, web
 
+from . import __version__
+from .runtime import actual_home_dir, resolve_path
+
 log = logging.getLogger("vice.share")
+UI_VERSION_TOKEN = "__VICE_VERSION__"
 
 
 def _resolve_ui_index() -> Path | None:
@@ -54,8 +58,8 @@ def _resolve_ui_index() -> Path | None:
     return None
 
 # Thumbnails go in the cache dir — separate from the clip files.
-THUMB_DIR      = Path.home() / ".cache" / "vice" / "thumbs"
-HIGHLIGHTS_DIR = Path.home() / ".local" / "share" / "vice" / "highlights"
+THUMB_DIR      = actual_home_dir() / ".cache" / "vice" / "thumbs"
+HIGHLIGHTS_DIR = actual_home_dir() / ".local" / "share" / "vice" / "highlights"
 
 
 def _load_highlights(slug: str) -> list:
@@ -265,7 +269,7 @@ class ShareServer:
 
     async def start(self) -> None:
         # Pre-populate from output dir
-        out_dir = Path(self.cfg.output.directory)
+        out_dir = resolve_path(self.cfg.output.directory)
         if out_dir.exists():
             for mp4 in sorted(out_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime):
                 self._clips[mp4.stem] = mp4
@@ -408,6 +412,7 @@ class ShareServer:
 
         try:
             content = ui_index.read_text(encoding="utf-8")
+            content = content.replace(UI_VERSION_TOKEN, __version__)
             return web.Response(text=content, content_type="text/html")
         except Exception as exc:
             log.error("Failed reading UI file %s: %s", ui_index, exc)

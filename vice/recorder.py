@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .config import Config
+from .runtime import resolve_path
 
 log = logging.getLogger("vice.recorder")
 
@@ -293,7 +294,7 @@ class Recorder(ABC):
             log.warning("Session already active")
             return None
 
-        out_dir = Path(self.cfg.output.directory)
+        out_dir = resolve_path(self.cfg.output.directory)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = _next_session_path(out_dir)
 
@@ -535,6 +536,40 @@ async def _trim_to_last_n_seconds(path: Path, seconds: int) -> Path:
     return path
 
 
+async def _wait_for_finalized_clip(
+    path: Path,
+    *,
+    stable_polls: int = 3,
+    poll_interval: float = 0.25,
+    timeout: float = 10.0,
+) -> bool:
+    """Wait until a replay clip stops changing and ffprobe can read it."""
+    deadline = time.monotonic() + timeout
+    last_sig: tuple[int, int] | None = None
+    stable = 0
+
+    while time.monotonic() < deadline:
+        try:
+            st = path.stat()
+            sig = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            await asyncio.sleep(poll_interval)
+            continue
+
+        if sig[0] > 0 and sig == last_sig:
+            stable += 1
+        else:
+            stable = 0
+            last_sig = sig
+
+        if stable >= stable_polls and await _get_duration(path) > 0:
+            return True
+
+        await asyncio.sleep(poll_interval)
+
+    return False
+
+
 _WATERMARK = (
     "drawtext=text='Clipped with Vice'"
     ":x=w-tw-12:y=h-th-12"
@@ -589,7 +624,7 @@ class GSRRecorder(Recorder):
     def __init__(self, cfg: Config) -> None:
         super().__init__(cfg)
         self._proc: Optional[asyncio.subprocess.Process] = None
-        self._out_dir = Path(cfg.output.directory)
+        self._out_dir = resolve_path(cfg.output.directory)
         self._watch_task: Optional[asyncio.Task] = None
         self._seen_files: set[str] = set()
 
@@ -679,8 +714,8 @@ class GSRRecorder(Recorder):
             log.error("GSR process not found")
             return None
 
-        # Wait for the new file to appear (up to 10 s)
-        deadline = time.monotonic() + 10
+        # Wait for the new file to appear and finish writing.
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             await asyncio.sleep(0.25)
             current = {f.name for f in self._out_dir.glob("*.mp4")}
@@ -691,6 +726,10 @@ class GSRRecorder(Recorder):
                     key=lambda p: p.stat().st_mtime,
                 )
                 self._seen_files = current
+                remaining = max(0.5, deadline - time.monotonic())
+                if not await _wait_for_finalized_clip(newest, timeout=remaining):
+                    log.error("Timed out waiting for GSR clip to finish writing: %s", newest)
+                    return None
                 # Rename GSR's auto-generated filename to sequential Vice_Clip_N name.
                 seq_path = _next_clip_path(self._out_dir)
                 newest.rename(seq_path)
@@ -736,7 +775,7 @@ class SegmentRecorder(Recorder):
         self._loop_task: Optional[asyncio.Task] = None
         self._current_proc: Optional[asyncio.subprocess.Process] = None
         self._encoder = choose_encoder(cfg.recording.encoder)
-        self._out_dir = Path(cfg.output.directory)
+        self._out_dir = resolve_path(cfg.output.directory)
         self._out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Capture commands ──────────────────────────────────────────────────────
