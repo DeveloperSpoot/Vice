@@ -6,7 +6,7 @@
 # Vice
 
 **Medal.tv-style game clip recorder for Linux.**
-Press a hotkey — instantly save the last 15 seconds of gameplay.
+Press a hotkey to instantly save the last few seconds of gameplay.
 
 Website: https://viceclipper.framer.website/
 
