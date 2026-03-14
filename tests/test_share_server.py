@@ -163,3 +163,85 @@ class ShareServerBaseUrlTests(unittest.TestCase):
         server._public_bind_url = "http://127.0.0.1:8766"
 
         self.assertEqual(server.public_base_url(), "https://clips.example.com")
+
+
+class ShareServerLegacyUrlCompatibilityTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+        root = Path(self.tmpdir.name)
+        self.output_dir = root / "clips"
+        self.output_dir.mkdir()
+        self.thumb_dir = root / "thumbs"
+        self.thumb_dir.mkdir()
+        self.highlights_dir = root / "highlights"
+        self.highlights_dir.mkdir()
+
+        self.clip_path = self.output_dir / "legacy_clip.mp4"
+        self.clip_path.write_bytes(b"not-a-real-mp4")
+
+        self.thumb_path = self.thumb_dir / "legacy_clip.jpg"
+        self.thumb_path.write_bytes(b"jpeg")
+
+        self.local_port = _free_port()
+        self.public_port = _free_port()
+        while self.public_port == self.local_port:
+            self.public_port = _free_port()
+
+        async def _stub_make_thumb(_: Path) -> Path:
+            return self.thumb_path
+
+        self.patchers = [
+            mock.patch("vice.share._local_ip", return_value="127.0.0.2"),
+            mock.patch("vice.share.THUMB_DIR", self.thumb_dir),
+            mock.patch("vice.share.HIGHLIGHTS_DIR", self.highlights_dir),
+            mock.patch("vice.share._ffprobe", new=_stub_ffprobe),
+            mock.patch("vice.share._make_thumb", new=_stub_make_thumb),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        cfg = Config(
+            output=OutputConfig(directory=str(self.output_dir)),
+            sharing=SharingConfig(
+                port=self.local_port,
+                public_port=self.public_port,
+                cloudflare_tunnel=False,
+            ),
+        )
+        self.server = ShareServer(cfg)
+
+        await self.server.start()
+        self.server.add_clip(self.clip_path)
+        self.client = ClientSession()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+        await self.server.stop()
+
+    async def test_legacy_pre_v1_0_12_share_urls_still_resolve(self) -> None:
+        legacy_base = f"http://127.0.0.2:{self.local_port}"
+
+        async with self.client.get(f"{legacy_base}/c/legacy_clip") as resp:
+            self.assertEqual(resp.status, 200)
+            html = await resp.text()
+        self.assertIn(f"{legacy_base}/v/legacy_clip", html)
+
+        async with self.client.get(f"{legacy_base}/v/legacy_clip") as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("Content-Type"), "video/mp4")
+
+        async with self.client.get(f"{legacy_base}/t/legacy_clip") as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("Content-Type"), "image/jpeg")
+
+    async def test_legacy_origin_still_blocks_ui_and_api_routes(self) -> None:
+        legacy_base = f"http://127.0.0.2:{self.local_port}"
+
+        async with self.client.get(f"{legacy_base}/") as resp:
+            self.assertEqual(resp.status, 404)
+
+        async with self.client.get(f"{legacy_base}/api/clips") as resp:
+            self.assertEqual(resp.status, 404)

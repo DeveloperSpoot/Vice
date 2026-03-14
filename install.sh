@@ -160,24 +160,41 @@ if ! command -v cloudflared &>/dev/null; then
 fi
 
 # ── Install pywebview system deps ────────────────────────────────────────────
-info "Installing pywebview system dependencies (for native window)..."
+info "Installing pywebview system dependencies (for native window/audio)..."
 case "$PKG" in
     pacman)
-        sudo pacman -S --needed --noconfirm python-gobject webkit2gtk-4.1 2>/dev/null || \
-        sudo pacman -S --needed --noconfirm python-gobject webkit2gtk 2>/dev/null || true
+        sudo pacman -S --needed --noconfirm \
+            python-gobject webkit2gtk-4.1 gstreamer gst-plugins-base gst-plugins-good \
+            2>/dev/null || \
+        sudo pacman -S --needed --noconfirm \
+            python-gobject webkit2gtk gstreamer gst-plugins-base gst-plugins-good \
+            2>/dev/null || true
         ;;
     apt)
         sudo apt-get install -y python3-gi python3-gi-cairo \
             gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
-            libwebkit2gtk-4.1-0 2>/dev/null || \
-        sudo apt-get install -y python3-gi gir1.2-webkit2-4.0 2>/dev/null || true
+            libwebkit2gtk-4.1-0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            2>/dev/null || \
+        sudo apt-get install -y python3-gi gir1.2-webkit2-4.0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            2>/dev/null || true
         ;;
     dnf)
-        sudo dnf install -y python3-gobject webkit2gtk4.1 2>/dev/null || \
-        sudo dnf install -y python3-gobject webkit2gtk3 2>/dev/null || true
+        sudo dnf install -y \
+            python3-gobject webkit2gtk4.1 \
+            gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good \
+            2>/dev/null || \
+        sudo dnf install -y \
+            python3-gobject webkit2gtk3 \
+            gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good \
+            2>/dev/null || true
         ;;
     zypper)
-        sudo zypper install -y python3-gobject typelib-1_0-WebKit2-4_1 2>/dev/null || true
+        sudo zypper install -y \
+            python3-gobject typelib-1_0-WebKit2-4_1 \
+            gstreamer gstreamer-plugins-base gstreamer-plugins-good \
+            2>/dev/null || true
         ;;
 esac
 

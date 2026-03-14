@@ -193,6 +193,7 @@ class ShareServer:
         self._local_site: Optional[web.TCPSite] = None
         self._public_runner: Optional[web.AppRunner] = None
         self._public_site: Optional[web.TCPSite] = None
+        self._legacy_public_site: Optional[web.TCPSite] = None
 
         # slug → Path  (populated from disk on start + runtime additions)
         self._clips: dict[str, Path] = {}
@@ -203,6 +204,7 @@ class ShareServer:
         self._tunnel_url:  Optional[str] = None
         self._local_base_url: Optional[str] = None
         self._public_bind_url: Optional[str] = None
+        self._legacy_public_bind_url: Optional[str] = None
 
         # Connected WebSocket clients
         self._ws_clients: set[web.WebSocketResponse] = set()
@@ -270,6 +272,7 @@ class ShareServer:
 
         local_port = self.cfg.sharing.port
         public_port = self.cfg.sharing.public_port or (local_port + 1)
+        public_host = _local_ip()
 
         self._local_runner = web.AppRunner(self._local_app, access_log=None)
         await self._local_runner.setup()
@@ -282,11 +285,27 @@ class ShareServer:
         await self._public_site.start()
 
         self._local_base_url = f"http://127.0.0.1:{local_port}"
-        self._public_bind_url = f"http://{_local_ip()}:{public_port}"
+        self._public_bind_url = f"http://{public_host}:{public_port}"
         log.info("Vice local control UI: %s", self._local_base_url)
         log.info("Vice public share server: %s", self._public_bind_url)
         if self.cfg.sharing.base_url:
             log.info("Vice public base URL override: %s", self.cfg.sharing.base_url)
+        elif public_host not in {"127.0.0.1", "0.0.0.0"}:
+            try:
+                self._legacy_public_site = web.TCPSite(self._public_runner, public_host, local_port)
+                await self._legacy_public_site.start()
+                self._legacy_public_bind_url = f"http://{public_host}:{local_port}"
+                log.info(
+                    "Vice legacy share compatibility URL: %s",
+                    self._legacy_public_bind_url,
+                )
+            except OSError as exc:
+                log.warning(
+                    "Failed to enable legacy share compatibility on %s:%d: %s",
+                    public_host,
+                    local_port,
+                    exc,
+                )
 
         if self.cfg.sharing.cloudflare_tunnel:
             await self._start_tunnel(public_port)

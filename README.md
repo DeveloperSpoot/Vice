@@ -194,6 +194,7 @@ base_url          = "https://clips.example.com"   # optional public share origin
 **App launcher icon does nothing**
 > Check the log: `cat ~/.local/share/vice/vice-app.log`
 > Common cause: recording backend not found. Install `gpu-screen-recorder`, `wf-recorder`, or `ffmpeg`.
+> If the log says `GStreamer element autoaudiosink not found`, install your distro's GStreamer base/good plugin packages and relaunch Vice.
 
 **Hotkey not working**
 > You may need to be in the `input` group:
