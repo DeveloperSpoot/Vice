@@ -164,6 +164,7 @@ Vice uses **evdev** to read hotkeys directly from `/dev/input/` — works on any
 buffer_duration = 120   # seconds kept in rolling buffer
 clip_duration   = 15    # seconds saved per clip
 fps             = 60
+display         = "DP-1"   # optional; omit to auto-select the current display
 encoder         = "auto"   # auto | h264_nvenc | libx264 | hevc_nvenc | h264_vaapi
 backend         = "auto"   # auto | gsr | wf-recorder | ffmpeg
 capture_audio   = true

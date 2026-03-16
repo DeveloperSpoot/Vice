@@ -1152,11 +1152,18 @@
 
           <div class="settings-row">
             <div class="s-label"><strong>Recording Backend</strong><span>Screen capture method</span></div>
-            <select id="s-backend">
+            <select id="s-backend" onchange="onBackendChange()">
               <option value="auto">Auto (recommended)</option>
               <option value="gsr">gpu-screen-recorder</option>
               <option value="wf-recorder">wf-recorder (Wayland)</option>
               <option value="ffmpeg">ffmpeg (X11)</option>
+            </select>
+          </div>
+
+          <div class="settings-row">
+            <div class="s-label"><strong>Display</strong><span id="s-display-note">Choose which display to record (Auto = current display)</span></div>
+            <select id="s-display">
+              <option value="">Auto (current display)</option>
             </select>
           </div>
 
@@ -1640,6 +1647,7 @@ let tunnelUrl = null;
 let hotkeysAvailable = true;
 let runtimeBackend = '';
 let pendingMicToggle = null;
+let displayInfo = { backend: 'auto', displays: [], warning: null };
 
 // Trim state
 let trimSlug  = null;
@@ -1949,6 +1957,7 @@ async function fetchConfig() {
     const r = await fetch('/api/config');
     cfg = await r.json();
     populateSettings(cfg);
+    await refreshDisplayOptions((cfg.recording || {}).backend || 'auto', (cfg.recording || {}).display ?? null);
   } catch (_) {}
 }
 
@@ -2013,6 +2022,74 @@ async function persistConfig(body) {
 
 function clipMicToggle() {
   return document.getElementById('clips-mic-toggle');
+}
+
+function displaySelect() {
+  return document.getElementById('s-display');
+}
+
+function defaultDisplayNote() {
+  return 'Choose which display to record (Auto = current display)';
+}
+
+function setDisplayNote(message, warning = false) {
+  const el = document.getElementById('s-display-note');
+  if (!el) return;
+  el.textContent = message || defaultDisplayNote();
+  el.style.color = warning ? '#fcd34d' : 'var(--muted)';
+}
+
+function selectedBackend() {
+  return document.getElementById('s-backend')?.value || 'auto';
+}
+
+function renderDisplayOptions(info, selectedDisplay = null) {
+  const el = displaySelect();
+  if (!el) return;
+
+  const displays = Array.isArray(info.displays) ? info.displays : [];
+  const desired = selectedDisplay ?? '';
+  el.innerHTML = '';
+  el.add(new Option('Auto (current display)', ''));
+  for (const item of displays) {
+    el.add(new Option(item.label || item.id, item.id));
+  }
+
+  if (desired && displays.some(item => item.id === desired)) {
+    el.value = desired;
+    setDisplayNote(defaultDisplayNote());
+    return;
+  }
+
+  el.value = '';
+  if (desired) {
+    setDisplayNote(`Saved display "${desired}" is unavailable right now. Auto will be used.`, true);
+    return;
+  }
+  if (info.warning) {
+    setDisplayNote(`${info.warning} Auto will still work.`, true);
+    return;
+  }
+  if (!displays.length) {
+    setDisplayNote('No individual displays were detected. Auto will still work.', true);
+    return;
+  }
+  setDisplayNote(defaultDisplayNote());
+}
+
+async function refreshDisplayOptions(backend = selectedBackend(), selectedDisplay = null) {
+  try {
+    const resp = await fetch(`/api/displays?backend=${encodeURIComponent(backend || 'auto')}`);
+    displayInfo = await resp.json();
+  } catch (_) {
+    displayInfo = { backend: backend || 'auto', displays: [], warning: 'Could not load display options.' };
+  }
+  renderDisplayOptions(displayInfo, selectedDisplay);
+}
+
+async function onBackendChange() {
+  const preferred = displaySelect()?.value || (cfg.recording || {}).display || null;
+  await refreshDisplayOptions(selectedBackend(), preferred);
 }
 
 function selectedWfMicStrategy() {
@@ -2096,6 +2173,7 @@ async function saveSettings() {
       buffer_duration: +document.getElementById('s-buf').value,
       clip_duration:   +document.getElementById('s-dur').value,
       fps:             +document.getElementById('s-fps').value,
+      display:         displaySelect().value || null,
       resolution:      document.getElementById('s-res').value || null,
       encoder:         document.getElementById('s-enc').value,
       backend:         document.getElementById('s-backend').value,

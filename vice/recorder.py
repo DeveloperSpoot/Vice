@@ -145,6 +145,231 @@ def _gsr_sanitize_args(args: list[str], blocked_flags: set[str]) -> list[str]:
         i += 1
     return out
 
+
+def _selected_display_id(rc) -> Optional[str]:
+    value = getattr(rc, "display", None)
+    if value is None:
+        return None
+    selected = str(value).strip()
+    return selected or None
+
+
+def _detect_x11_resolution() -> Optional[str]:
+    try:
+        out = subprocess.check_output(
+            ["xdpyinfo"], text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            if "dimensions:" in line:
+                return line.split()[1]  # e.g. "1920x1080"
+    except Exception:
+        pass
+    return None
+
+
+def _parse_gsr_display_lines(raw: str) -> list[dict]:
+    displays: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        line = line.lstrip("-*• ").strip()
+        if not line or line.lower().startswith("monitor"):
+            continue
+        ident = line
+        if ":" in line:
+            head, _ = line.split(":", 1)
+            if head and " " not in head:
+                ident = head.strip()
+        else:
+            ident = line.split()[0]
+        displays.append({"id": ident, "label": line})
+    return displays
+
+
+def _parse_wf_display_lines(raw: str) -> list[dict]:
+    displays: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        line = line.lstrip("-*• ").strip()
+        if not line:
+            continue
+        ident = line
+        if ":" in line:
+            head, _ = line.split(":", 1)
+            if head and " " not in head:
+                ident = head.strip()
+        else:
+            ident = line.split()[0]
+        displays.append({"id": ident, "label": line})
+    return displays
+
+
+def _parse_xrandr_display_lines(raw: str) -> list[dict]:
+    displays: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("Monitors:"):
+            continue
+        match = re.match(
+            r"^\d+:\s+([+*]*)(\S+)\s+(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)\s+(\S+)$",
+            line,
+        )
+        if not match:
+            continue
+        flags, _, width, height, x, y, ident = match.groups()
+        displays.append(
+            {
+                "id": ident,
+                "label": f"{ident} ({width}x{height})",
+                "width": int(width),
+                "height": int(height),
+                "x": int(x),
+                "y": int(y),
+                "primary": "*" in flags,
+            }
+        )
+    return displays
+
+
+def _display_options(backend: str) -> list[dict]:
+    if backend == "gsr":
+        if not _has("gpu-screen-recorder"):
+            return []
+        try:
+            out = subprocess.check_output(
+                ["gpu-screen-recorder", "--list-monitors"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            return []
+        return _parse_gsr_display_lines(out)
+
+    if backend == "wf-recorder":
+        if not _has("wf-recorder"):
+            return []
+        try:
+            out = subprocess.check_output(
+                ["wf-recorder", "-L"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            return []
+        return _parse_wf_display_lines(out)
+
+    if backend == "ffmpeg":
+        if not _has("xrandr"):
+            return []
+        try:
+            out = subprocess.check_output(
+                ["xrandr", "--listactivemonitors"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            return []
+        return _parse_xrandr_display_lines(out)
+
+    return []
+
+
+def resolve_display_backend(preferred: str = "auto") -> str:
+    if preferred == "gsr" or (preferred == "auto" and _has("gpu-screen-recorder")):
+        return "gsr"
+    if preferred == "wf-recorder" or (preferred == "auto" and _is_wayland() and _has("wf-recorder")):
+        return "wf-recorder"
+    if preferred == "ffmpeg" or _is_x11():
+        return "ffmpeg"
+    return preferred
+
+
+def list_display_options(preferred: str = "auto") -> dict:
+    backend = resolve_display_backend(preferred)
+    displays = _display_options(backend)
+    warning = None
+    if preferred in {"gsr", "wf-recorder", "ffmpeg"} and not displays:
+        warning = f"Could not list displays for {backend}."
+    return {"backend": backend, "displays": displays, "warning": warning}
+
+
+def _resolve_display_option(rc, backend: str) -> Optional[dict]:
+    selected = _selected_display_id(rc)
+    if not selected:
+        return None
+    for opt in _display_options(backend):
+        if opt.get("id") == selected:
+            return opt
+    log.warning("Configured display %r is unavailable for backend %s; using auto capture", selected, backend)
+    return None
+
+
+def _default_gsr_capture_target() -> str:
+    return "screen" if _is_wayland() else os.environ.get("DISPLAY", ":0")
+
+
+def _gsr_capture_target(rc) -> str:
+    selected = _resolve_display_option(rc, "gsr")
+    return str(selected["id"]) if selected else _default_gsr_capture_target()
+
+
+def _wf_capture_target(rc) -> Optional[str]:
+    selected = _resolve_display_option(rc, "wf-recorder")
+    return str(selected["id"]) if selected else None
+
+
+def _resolution_scale_filter(resolution: Optional[str]) -> Optional[str]:
+    if not resolution:
+        return None
+    if "x" not in resolution:
+        return None
+    width, height = resolution.lower().split("x", 1)
+    if not width.isdigit() or not height.isdigit():
+        return None
+    return f"scale={width}:{height}"
+
+
+def _merge_ffmpeg_filters(flags: list[str], extra_filter: Optional[str]) -> list[str]:
+    if not extra_filter:
+        return flags
+    out: list[str] = []
+    i = 0
+    merged = False
+    while i < len(flags):
+        arg = flags[i]
+        if arg == "-vf" and i + 1 < len(flags):
+            out += ["-vf", f"{extra_filter},{flags[i + 1]}"]
+            merged = True
+            i += 2
+            continue
+        out.append(arg)
+        i += 1
+    if not merged:
+        return ["-vf", extra_filter, *out]
+    return out
+
+
+def _ffmpeg_x11_input_args(rc) -> tuple[list[str], Optional[str]]:
+    display = os.environ.get("DISPLAY", ":0")
+    selected = _resolve_display_option(rc, "ffmpeg")
+    if selected:
+        video_size = f"{selected['width']}x{selected['height']}"
+        input_display = f"{display}+{selected['x']},{selected['y']}"
+        return (
+            ["-f", "x11grab", "-framerate", str(rc.fps), "-video_size", video_size, "-i", input_display],
+            _resolution_scale_filter(rc.resolution),
+        )
+
+    res = rc.resolution or _detect_x11_resolution()
+    args = ["-f", "x11grab", "-framerate", str(rc.fps)]
+    if res:
+        args += ["-s", res]
+    args += ["-i", display]
+    return args, None
+
 def _desktop_audio_source(preferred: str) -> str:
     """
     Resolve a Pulse/PipeWire source name that captures desktop output audio.
@@ -483,7 +708,7 @@ class Recorder(ABC):
         cmd = ["gpu-screen-recorder"]
 
         if not _gsr_has_any_flag(extra, "-w"):
-            cmd += ["-w", "screen" if _is_wayland() else os.environ.get("DISPLAY", ":0")]
+            cmd += ["-w", _gsr_capture_target(rc)]
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
         if not _gsr_has_any_flag(extra, "-c"):
@@ -498,26 +723,11 @@ class Recorder(ABC):
 
     @staticmethod
     def _ffmpeg_session_cmd(out_path: Path, encoder: str, rc) -> list[str]:
-        display = os.environ.get("DISPLAY", ":0")
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
-        cmd += ["-f", "x11grab", "-framerate", str(rc.fps)]
-        res = rc.resolution
-        if not res:
-            # Try to auto-detect
-            try:
-                import subprocess as _sp
-                out = _sp.check_output(["xdpyinfo"], text=True, stderr=_sp.DEVNULL)
-                for line in out.splitlines():
-                    if "dimensions:" in line:
-                        res = line.split()[1]
-                        break
-            except Exception:
-                pass
-        if res:
-            cmd += ["-s", res]
-        cmd += ["-i", display]
+        input_args, extra_filter = _ffmpeg_x11_input_args(rc)
+        cmd += input_args
         cmd += _ffmpeg_audio_input_args(rc)
-        cmd += _encoder_flags(encoder, rc.crf)
+        cmd += _merge_ffmpeg_filters(_encoder_flags(encoder, rc.crf), extra_filter)
         cmd += _ffmpeg_audio_output_args(rc)
         cmd += ["-y", str(out_path)]
         return cmd
@@ -728,11 +938,7 @@ class GSRRecorder(Recorder):
 
         # Allow manual overrides through recording.gsr_args.
         if not _gsr_has_any_flag(extra, "-w"):
-            if _is_wayland():
-                cmd += ["-w", "screen"]
-            else:
-                display = os.environ.get("DISPLAY", ":0")
-                cmd += ["-w", display]
+            cmd += ["-w", _gsr_capture_target(rc)]
 
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
@@ -884,6 +1090,9 @@ class SegmentRecorder(Recorder):
         if rc.resolution:
             # wf-recorder geometry flag
             pass  # resolution is auto by default; geometry can be set with -g
+        target = _wf_capture_target(rc)
+        if target:
+            cmd += ["-o", target]
         audio_device = _wf_audio_device(rc)
         if audio_device:
             cmd += [f"--audio={audio_device}"]
@@ -899,17 +1108,12 @@ class SegmentRecorder(Recorder):
 
     def _ffmpeg_x11_cmd(self, out: Path) -> list[str]:
         rc = self.cfg.recording
-        display = os.environ.get("DISPLAY", ":0")
-        res = rc.resolution or self._detect_x11_resolution()
-
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
-        cmd += ["-f", "x11grab", "-framerate", str(rc.fps)]
-        if res:
-            cmd += ["-s", res]
-        cmd += ["-i", display]
+        input_args, extra_filter = _ffmpeg_x11_input_args(rc)
+        cmd += input_args
         cmd += _ffmpeg_audio_input_args(rc)
 
-        enc_flags = _encoder_flags(self._encoder, rc.crf)
+        enc_flags = _merge_ffmpeg_filters(_encoder_flags(self._encoder, rc.crf), extra_filter)
         cmd += enc_flags
 
         cmd += _ffmpeg_audio_output_args(rc)
@@ -919,16 +1123,7 @@ class SegmentRecorder(Recorder):
 
     @staticmethod
     def _detect_x11_resolution() -> Optional[str]:
-        try:
-            out = subprocess.check_output(
-                ["xdpyinfo"], text=True, stderr=subprocess.DEVNULL
-            )
-            for line in out.splitlines():
-                if "dimensions:" in line:
-                    return line.split()[1]  # e.g. "1920x1080"
-        except Exception:
-            pass
-        return None
+        return _detect_x11_resolution()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

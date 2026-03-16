@@ -1,4 +1,5 @@
 import asyncio
+import json
 import socket
 import tempfile
 import unittest
@@ -6,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from vice import __version__
-from vice.config import Config, OutputConfig, SharingConfig
+from vice.config import Config, OutputConfig, RecordingConfig, SharingConfig
 
 try:
     from aiohttp import ClientSession
@@ -113,6 +114,20 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
         async with self.client.post(f"{local_base}/api/trigger") as resp:
             self.assertEqual(resp.status, 200)
         await asyncio.wait_for(self.triggered.wait(), timeout=1.0)
+
+        with mock.patch(
+            "vice.share.list_display_options",
+            return_value={
+                "backend": "gsr",
+                "displays": [{"id": "DP-1", "label": "DP-1"}],
+                "warning": None,
+            },
+        ):
+            async with self.client.get(f"{local_base}/api/displays?backend=gsr") as resp:
+                self.assertEqual(resp.status, 200)
+                displays = await resp.json()
+        self.assertEqual(displays["backend"], "gsr")
+        self.assertEqual(displays["displays"][0]["id"], "DP-1")
 
         ws = await self.client.ws_connect(f"ws://127.0.0.1:{self.local_port}/ws")
         await ws.close()
@@ -269,3 +284,25 @@ class ShareServerLegacyUrlCompatibilityTests(unittest.IsolatedAsyncioTestCase):
 
         async with self.client.get(f"{legacy_base}/api/clips") as resp:
             self.assertEqual(resp.status, 404)
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class ShareServerDisplayApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_api_get_displays_returns_backend_options_and_selected_value(self) -> None:
+        server = ShareServer(Config(recording=RecordingConfig(display="DP-1", backend="auto")))
+        request = mock.Mock(query={"backend": "gsr"})
+
+        with mock.patch(
+            "vice.share.list_display_options",
+            return_value={
+                "backend": "gsr",
+                "displays": [{"id": "DP-1", "label": "DP-1"}],
+                "warning": None,
+            },
+        ):
+            response = await server._api_get_displays(request)
+
+        payload = json.loads(response.text)
+        self.assertEqual(payload["backend"], "gsr")
+        self.assertEqual(payload["selected"], "DP-1")
+        self.assertEqual(payload["displays"][0]["id"], "DP-1")

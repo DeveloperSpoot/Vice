@@ -9,7 +9,13 @@ from unittest import mock
 
 from vice import config as config_mod
 from vice.config import Config, OutputConfig, RecordingConfig, SharingConfig
-from vice.recorder import GSRRecorder, SegmentRecorder, create_recorder, _wait_for_finalized_clip
+from vice.recorder import (
+    GSRRecorder,
+    SegmentRecorder,
+    create_recorder,
+    list_display_options,
+    _wait_for_finalized_clip,
+)
 from vice.runtime import actual_home_dir, normalize_runtime_environment
 
 try:
@@ -72,7 +78,7 @@ class ConfigPathResolutionTests(unittest.TestCase):
 
         self.assertEqual(cfg.output.directory, str(actual_home_dir() / "Videos" / "Vice"))
 
-    def test_save_and_load_preserve_microphone_fields(self) -> None:
+    def test_save_and_load_preserve_recording_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_dir = root / ".config" / "vice"
@@ -83,6 +89,7 @@ class ConfigPathResolutionTests(unittest.TestCase):
                 recording=RecordingConfig(
                     capture_microphone=True,
                     wf_microphone_strategy="backend_fallback",
+                    display="DP-1",
                 )
             )
 
@@ -93,6 +100,7 @@ class ConfigPathResolutionTests(unittest.TestCase):
 
         self.assertTrue(loaded.recording.capture_microphone)
         self.assertEqual(loaded.recording.wf_microphone_strategy, "backend_fallback")
+        self.assertEqual(loaded.recording.display, "DP-1")
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
@@ -201,6 +209,24 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RecorderAudioCommandTests(unittest.TestCase):
+    def test_list_display_options_parses_xrandr_monitors(self) -> None:
+        xrandr_out = "\n".join(
+            [
+                "Monitors: 2",
+                " 0: +*DP-1 2560/600x1440/340+1920+0  DP-1",
+                " 1: +HDMI-1 1920/520x1080/290+0+0  HDMI-1",
+            ]
+        )
+
+        with mock.patch("vice.recorder._has", side_effect=lambda tool: tool == "xrandr"):
+            with mock.patch("vice.recorder.subprocess.check_output", return_value=xrandr_out):
+                info = list_display_options("ffmpeg")
+
+        self.assertEqual(info["backend"], "ffmpeg")
+        self.assertEqual([d["id"] for d in info["displays"]], ["DP-1", "HDMI-1"])
+        self.assertEqual(info["displays"][0]["x"], 1920)
+        self.assertEqual(info["displays"][0]["width"], 2560)
+
     def test_gsr_build_cmd_includes_desktop_and_microphone_audio(self) -> None:
         recorder = GSRRecorder(
             Config(
@@ -217,6 +243,20 @@ class RecorderAudioCommandTests(unittest.TestCase):
         self.assertIn("-a", cmd)
         idx = cmd.index("-a")
         self.assertEqual(cmd[idx + 1], "default_output|default_input")
+
+    def test_gsr_build_cmd_uses_selected_display(self) -> None:
+        recorder = GSRRecorder(
+            Config(
+                output=OutputConfig(directory="/tmp/vice-test"),
+                recording=RecordingConfig(display="DP-1"),
+            )
+        )
+
+        with mock.patch("vice.recorder._display_options", return_value=[{"id": "DP-1", "label": "DP-1"}]):
+            cmd = recorder._build_cmd()
+
+        self.assertIn("-w", cmd)
+        self.assertEqual(cmd[cmd.index("-w") + 1], "DP-1")
 
     def test_ffmpeg_segment_cmd_mixes_desktop_and_microphone_audio(self) -> None:
         recorder = SegmentRecorder(
@@ -238,6 +278,28 @@ class RecorderAudioCommandTests(unittest.TestCase):
         self.assertIn("-filter_complex", cmd)
         self.assertIn("[1:a][2:a]amix=inputs=2:normalize=0[aout]", cmd)
 
+    def test_ffmpeg_segment_cmd_uses_selected_monitor_geometry(self) -> None:
+        recorder = SegmentRecorder(
+            Config(
+                recording=RecordingConfig(
+                    display="DP-1",
+                    resolution="1920x1080",
+                )
+            ),
+            use_wf_recorder=False,
+        )
+
+        displays = [{"id": "DP-1", "label": "DP-1", "width": 2560, "height": 1440, "x": 1920, "y": 0}]
+        with mock.patch("vice.recorder._display_options", return_value=displays):
+            cmd = recorder._ffmpeg_x11_cmd(Path("/tmp/out.mp4"))
+
+        self.assertIn("-video_size", cmd)
+        self.assertEqual(cmd[cmd.index("-video_size") + 1], "2560x1440")
+        self.assertIn("-i", cmd)
+        self.assertEqual(cmd[cmd.index("-i") + 1], ":0+1920,0")
+        self.assertIn("-vf", cmd)
+        self.assertIn("scale=1920:1080", cmd[cmd.index("-vf") + 1])
+
     def test_wf_recorder_uses_microphone_only_strategy(self) -> None:
         recorder = SegmentRecorder(
             Config(
@@ -254,6 +316,18 @@ class RecorderAudioCommandTests(unittest.TestCase):
             cmd = recorder._wf_recorder_cmd(Path("/tmp/out.mp4"))
 
         self.assertIn("--audio=mic.input", cmd)
+
+    def test_wf_recorder_uses_selected_display(self) -> None:
+        recorder = SegmentRecorder(
+            Config(recording=RecordingConfig(display="DP-1")),
+            use_wf_recorder=True,
+        )
+
+        with mock.patch("vice.recorder._display_options", return_value=[{"id": "DP-1", "label": "DP-1"}]):
+            cmd = recorder._wf_recorder_cmd(Path("/tmp/out.mp4"))
+
+        self.assertIn("-o", cmd)
+        self.assertEqual(cmd[cmd.index("-o") + 1], "DP-1")
 
     def test_create_recorder_uses_compat_backend_for_wf_microphone_mode(self) -> None:
         cfg = Config(

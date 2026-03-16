@@ -30,6 +30,8 @@ class RecordingConfig:
     # How many seconds to save when you hit the clip hotkey.
     clip_duration: int = 15
     fps: int = 60
+    # None = auto/current display. Otherwise a backend-specific display/output id.
+    display: Optional[str] = None
     # None = auto-detect from display. E.g. "1920x1080".
     resolution: Optional[str] = None
     # "auto" | "h264_nvenc" | "hevc_nvenc" | "libx264" | "libx265" | "h264_vaapi" | "copy"

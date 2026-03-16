@@ -29,6 +29,7 @@ from importlib.resources import files as _pkg_files
 from aiohttp import WSMsgType, web
 
 from . import __version__
+from .recorder import list_display_options
 from .runtime import actual_home_dir, resolve_path
 
 log = logging.getLogger("vice.share")
@@ -250,6 +251,7 @@ class ShareServer:
         r.add_patch("/api/clips/{slug}/highlights/{hid}", self._api_patch_highlight)
         r.add_delete("/api/clips/{slug}/highlights/{hid}",self._api_del_highlight)
         r.add_get("/api/config",               self._api_get_config)
+        r.add_get("/api/displays",             self._api_get_displays)
         r.add_post("/api/config",              self._api_set_config)
         r.add_get("/api/status",               self._api_status)
         r.add_post("/api/trigger",             self._api_trigger)
@@ -671,6 +673,12 @@ class ShareServer:
     async def _api_get_config(self, _: web.Request) -> web.Response:
         from .config import load as load_cfg
         return web.json_response(asdict(load_cfg()))
+
+    async def _api_get_displays(self, req: web.Request) -> web.Response:
+        backend = (req.query.get("backend") or self.cfg.recording.backend or "auto").strip() or "auto"
+        payload = list_display_options(backend)
+        payload["selected"] = self.cfg.recording.display
+        return web.json_response(payload)
 
     async def _api_set_config(self, req: web.Request) -> web.Response:
         from .config import (
