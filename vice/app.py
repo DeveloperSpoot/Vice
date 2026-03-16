@@ -30,7 +30,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from .runtime import actual_home_dir, normalize_runtime_environment
@@ -91,10 +91,15 @@ def _vice_cmd() -> list[str]:
 
 def _daemon_responds(timeout: float = 1.0) -> bool:
     """Return True when the Unix socket accepts an IPC request."""
-    if not SOCKET_FILE.exists():
-        return False
+    return _daemon_status(timeout=timeout) is not None
 
-    async def _probe() -> bool:
+
+def _daemon_status(timeout: float = 1.0) -> dict | None:
+    """Return daemon IPC status JSON, or None when the socket is unusable."""
+    if not SOCKET_FILE.exists():
+        return None
+
+    async def _probe() -> dict | None:
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_unix_connection(str(SOCKET_FILE)),
@@ -105,9 +110,12 @@ def _daemon_responds(timeout: float = 1.0) -> bool:
             resp = await asyncio.wait_for(reader.readline(), timeout=timeout)
             writer.close()
             await writer.wait_closed()
-            return bool(resp)
+            if not resp:
+                return None
+            import json
+            return json.loads(resp)
         except Exception:
-            return False
+            return None
 
     return asyncio.run(_probe())
 
@@ -160,13 +168,70 @@ def _wait_for_server(url: str, timeout: float = 20.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            urlopen(url, timeout=1)
-            return True
+            with urlopen(url, timeout=1) as resp:
+                status = getattr(resp, "status", 200)
+                if 200 <= status < 400:
+                    return True
+        except HTTPError as exc:
+            if 200 <= exc.code < 400:
+                return True
+            log.debug("Server probe failed for %s with HTTP %s", url, exc.code)
+            time.sleep(0.25)
         except URLError:
             time.sleep(0.25)
         except Exception:
             time.sleep(0.25)
     return False
+
+
+def _server_url_from_status(status: dict | None, fallback_url: str) -> str:
+    raw = (status or {}).get("local_url")
+    if not raw or not isinstance(raw, str):
+        return fallback_url
+    return raw.rstrip("/") + "/"
+
+
+def _clear_stale_socket() -> None:
+    if not SOCKET_FILE.exists():
+        return
+    if _daemon_responds():
+        return
+    log.warning("Removing stale daemon socket at %s", SOCKET_FILE)
+    SOCKET_FILE.unlink(missing_ok=True)
+
+
+def _ensure_server(default_url: str, startup_timeout: float = 20.0) -> str | None:
+    status = _daemon_status()
+    if status is not None:
+        url = _server_url_from_status(status, default_url)
+        if _wait_for_server(url, timeout=2.0):
+            log.info("Daemon already running (IPC + HTTP healthy)")
+            return url
+
+        log.warning("Daemon IPC responded but UI server did not (%s); restarting daemon", url)
+        _stop_daemon()
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if _daemon_status(timeout=0.5) is None:
+                break
+            time.sleep(0.1)
+        _clear_stale_socket()
+    else:
+        _clear_stale_socket()
+
+    _start_daemon()
+
+    if _wait_for_server(default_url, timeout=startup_timeout):
+        return default_url
+
+    status = _daemon_status()
+    url = _server_url_from_status(status, default_url)
+    if url != default_url and _wait_for_server(url, timeout=2.0):
+        return url
+
+    if status is not None:
+        log.error("Daemon IPC is alive but HTTP UI is unavailable at %s", url)
+    return None
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -189,7 +254,7 @@ def main() -> None:
     url = f"http://localhost:{port}/"
 
     try:
-        _start_daemon()
+        server_url = _ensure_server(url)
     except Exception:
         # Error already logged; show a user-visible message and exit.
         _show_error(
@@ -199,7 +264,7 @@ def main() -> None:
         sys.exit(1)
 
     log.info("Waiting for server at %s", url)
-    if not _wait_for_server(url):
+    if not server_url:
         log.error("Server did not start within 20 s")
         _show_error(
             "Vice started but the UI server did not respond.\n\n"
@@ -207,7 +272,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    log.info("Server ready, opening window")
+    log.info("Server ready at %s, opening window", server_url)
     # Disable WebKit GPU compositing — prevents a segfault crash on Wayland
     # compositors (Hyprland, sway, GNOME) where WebKit's GL backend conflicts
     # with the compositor's own rendering. Must be set before webview imports.
@@ -215,12 +280,12 @@ def main() -> None:
     os.environ.setdefault("WEBKIT_DISABLE_SANDBOX", "1")
     try:
         import webview  # type: ignore[import]
-        _run_webview(url)
+        _run_webview(server_url)
         log.info("Window closed")
     except ImportError:
         log.warning("pywebview not installed — falling back to browser")
         subprocess.Popen(
-            ["xdg-open", url],
+            ["xdg-open", server_url],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -229,7 +294,7 @@ def main() -> None:
         # Fall back to browser so the user isn't left with nothing
         log.warning("Falling back to browser")
         subprocess.Popen(
-            ["xdg-open", url],
+            ["xdg-open", server_url],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

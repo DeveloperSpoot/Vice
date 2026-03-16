@@ -339,6 +339,11 @@ class ShareServer:
         """Register a new clip and return its share URL."""
         slug = path.stem
         self._clips[slug] = path
+        self._meta.pop(slug, None)
+        asyncio.create_task(self.broadcast({
+            "type": "clip_saved",
+            "clip": self._clip_json(slug, path, {}),
+        }))
         asyncio.create_task(self._broadcast_clip(slug, path))
         return f"{self.public_base_url()}/c/{slug}"
 

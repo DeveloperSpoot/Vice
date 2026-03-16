@@ -36,6 +36,8 @@ cd Vice
 
 After the installer finishes, **restart your terminal**, then launch **Vice** from your app launcher (or run `vice-app`).
 
+Do not mix the AUR package with the `git clone` installer on the same user install. Remove `vice-clipper` first if you are switching away from the AUR package.
+
 > If the `vice` command isn't found after restart, run `exec $SHELL` (or `exec fish` on fish shell).
 
 ### Updating

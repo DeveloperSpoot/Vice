@@ -306,3 +306,33 @@ class ShareServerDisplayApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["backend"], "gsr")
         self.assertEqual(payload["selected"], "DP-1")
         self.assertEqual(payload["displays"][0]["id"], "DP-1")
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class ShareServerClipBroadcastTests(unittest.IsolatedAsyncioTestCase):
+    async def test_add_clip_broadcasts_immediately_before_metadata_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            clip_path = Path(tmp) / "clip.mp4"
+            clip_path.write_bytes(b"clip")
+            server = ShareServer(Config())
+            messages: list[dict] = []
+
+            async def _fake_broadcast(msg: dict) -> None:
+                messages.append(msg)
+
+            async def _slow_meta(_slug: str, _path: Path) -> dict:
+                await asyncio.sleep(0.05)
+                return {"width": 1920, "height": 1080, "duration": 6.5}
+
+            with mock.patch.object(server, "broadcast", side_effect=_fake_broadcast):
+                with mock.patch.object(server, "_get_meta", side_effect=_slow_meta):
+                    server.add_clip(clip_path)
+                    await asyncio.sleep(0)
+                    self.assertTrue(messages)
+                    self.assertEqual(messages[0]["type"], "clip_saved")
+                    self.assertEqual(messages[0]["clip"]["duration"], 0)
+
+                    await asyncio.sleep(0.06)
+
+            self.assertEqual(messages[-1]["type"], "clip_saved")
+            self.assertEqual(messages[-1]["clip"]["duration"], 6.5)

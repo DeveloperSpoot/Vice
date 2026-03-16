@@ -4,6 +4,20 @@
 
 set -euo pipefail
 
+ALLOW_MIXED_INSTALL=false
+for arg in "$@"; do
+    case "$arg" in
+        --allow-mixed-install)
+            ALLOW_MIXED_INSTALL=true
+            ;;
+        *)
+            echo "[vice] Unknown option: $arg" >&2
+            echo "Usage: ./install.sh [--allow-mixed-install]" >&2
+            exit 1
+            ;;
+    esac
+done
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info()    { echo -e "${GREEN}[vice]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[vice]${NC} $*"; }
@@ -20,6 +34,17 @@ else
     exit 1
 fi
 info "Detected package manager: $PKG"
+
+if [[ "$PKG" == "pacman" ]] && pacman -Q vice-clipper &>/dev/null; then
+    if ! $ALLOW_MIXED_INSTALL; then
+        error "Detected an existing AUR install of vice-clipper."
+        error "Mixed AUR + install.sh deployments are unsupported."
+        error "Remove the AUR package first: yay -Rns vice-clipper"
+        error "If you intentionally want to override this guard, rerun: ./install.sh --allow-mixed-install"
+        exit 1
+    fi
+    warn "Proceeding with a mixed install because --allow-mixed-install was provided."
+fi
 
 # ── Detect display server ─────────────────────────────────────────────────────
 if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then

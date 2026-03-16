@@ -10,6 +10,7 @@ from unittest import mock
 
 from vice import app as app_mod
 from vice import config as config_mod
+from vice import main as main_mod
 from vice.config import Config, OutputConfig, RecordingConfig, SharingConfig
 from vice.recorder import (
     GSRRecorder,
@@ -124,6 +125,35 @@ class AppStartupTests(unittest.TestCase):
         normalize_mock.assert_called_once()
         self.assertEqual(popen_mock.call_args.kwargs["env"]["WAYLAND_DISPLAY"], "wayland-7")
 
+    def test_ensure_server_reuses_healthy_daemon_url(self) -> None:
+        with mock.patch("vice.app._daemon_status", return_value={"local_url": "http://127.0.0.1:9001"}):
+            with mock.patch("vice.app._wait_for_server", return_value=True) as wait_mock:
+                with mock.patch("vice.app._start_daemon") as start_mock:
+                    url = app_mod._ensure_server("http://localhost:8765/")
+
+        self.assertEqual(url, "http://127.0.0.1:9001/")
+        wait_mock.assert_called_once_with("http://127.0.0.1:9001/", timeout=2.0)
+        start_mock.assert_not_called()
+
+    def test_ensure_server_restarts_when_ipc_is_alive_but_http_is_dead(self) -> None:
+        with mock.patch("vice.app._daemon_status", side_effect=[
+            {"local_url": "http://127.0.0.1:9001"},
+            None,
+        ]):
+            with mock.patch("vice.app._wait_for_server", side_effect=[False, True]) as wait_mock:
+                with mock.patch("vice.app._stop_daemon") as stop_mock:
+                    with mock.patch("vice.app._clear_stale_socket") as clear_mock:
+                        with mock.patch("vice.app._start_daemon") as start_mock:
+                            with mock.patch("vice.app.time.sleep"):
+                                url = app_mod._ensure_server("http://localhost:8765/")
+
+        self.assertEqual(url, "http://localhost:8765/")
+        stop_mock.assert_called_once()
+        clear_mock.assert_called_once()
+        start_mock.assert_called_once()
+        self.assertEqual(wait_mock.call_args_list[0].kwargs["timeout"], 2.0)
+        self.assertEqual(wait_mock.call_args_list[1].kwargs["timeout"], 20.0)
+
 
 class ConfigPathResolutionTests(unittest.TestCase):
     def test_load_expands_home_placeholders_in_output_directory(self) -> None:
@@ -205,6 +235,81 @@ class RecorderEnvironmentTests(unittest.TestCase):
             with mock.patch("vice.recorder.recover_wayland_display", return_value=True) as recover_mock:
                 self.assertTrue(_is_wayland())
         recover_mock.assert_called_once()
+
+
+class _FakeHotkeys:
+    available = True
+
+    def clear_bindings(self) -> None:
+        return None
+
+    def on(self, *_args, **_kwargs) -> None:
+        return None
+
+    def on_double(self, *_args, **_kwargs) -> None:
+        return None
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+
+class _FakeRecorder:
+    def __init__(self, result=None) -> None:
+        self.name = "fake"
+        self._result = result
+        self.save_calls = 0
+        self._cb = None
+
+    def on_clip_saved(self, cb) -> None:
+        self._cb = cb
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def save_clip(self):
+        self.save_calls += 1
+        await asyncio.sleep(0)
+        return self._result
+
+    def session_elapsed(self) -> float:
+        return 0.0
+
+
+class _FakeShare:
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+
+    async def broadcast(self, msg: dict) -> None:
+        self.messages.append(msg)
+
+
+class ViceDaemonClipFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_clip_trigger_broadcasts_progress_and_error(self) -> None:
+        recorder = _FakeRecorder(result=None)
+        with mock.patch("vice.main.load_config", return_value=Config()):
+            with mock.patch("vice.main.create_recorder", return_value=recorder):
+                with mock.patch("vice.main.HotkeyListener", return_value=_FakeHotkeys()):
+                    with mock.patch("vice.main.can_access_hotkeys", return_value=True):
+                        daemon = main_mod.ViceDaemon()
+
+        daemon.share = _FakeShare()
+
+        with mock.patch("vice.main.audio.play_clip"):
+            await daemon._handle_clip_hotkey()
+            self.assertIsNotNone(daemon._clip_task)
+            await daemon._clip_task
+
+        self.assertEqual(recorder.save_calls, 1)
+        self.assertEqual(
+            [msg["type"] for msg in daemon.share.messages],
+            ["clip_saving", "clip_error"],
+        )
 
 
 class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):

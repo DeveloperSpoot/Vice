@@ -1734,6 +1734,10 @@ function handleWS(msg) {
   } else if (msg.type === 'clip_deleted') {
     clips = clips.filter(c => c.slug !== msg.slug);
     renderClips();
+  } else if (msg.type === 'clip_saving') {
+    toast('Saving clip…', 'ok');
+  } else if (msg.type === 'clip_error') {
+    toast(msg.error || 'Clip save failed', 'err');
   } else if (msg.type === 'status') {
     setRecStatus(msg.recording, msg.backend, msg.session_active);
     applyHotkeyAvailability(msg.hotkeys_available);

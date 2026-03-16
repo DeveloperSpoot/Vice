@@ -55,6 +55,7 @@ USER_ICON_FILE = (
     / "apps"
     / "vice.svg"
 )
+DAEMON_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice.log"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ class ViceDaemon:
         self._recording_sig = self._recording_signature()
         self._pending_recording_apply = False
         self._config_apply_lock = asyncio.Lock()
+        self._clip_task: Optional[asyncio.Task] = None
 
     async def run(self) -> None:
         Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
@@ -88,7 +90,14 @@ class ViceDaemon:
             self.share.trigger_clip_cb = self._handle_clip_hotkey
             self.share.get_status_cb   = self._get_status
             self.share.apply_config_cb = self._apply_live_config
-            await self.share.start()
+            try:
+                await self.share.start()
+            except Exception:
+                log.exception(
+                    "Failed to start share server on 127.0.0.1:%s",
+                    self.cfg.sharing.port,
+                )
+                raise
 
         # Recorder callback — fires for both normal clips and session clips
         self.recorder.on_clip_saved(self._on_clip_saved)
@@ -106,6 +115,15 @@ class ViceDaemon:
         await self.hotkeys.start()
         self.hotkeys_available = self.hotkeys.available
         await self.recorder.start()
+        if self.share:
+            log.info("Vice local control UI: %s", self.share.local_base_url())
+        else:
+            log.info("Vice local control UI disabled by config")
+        log.info(
+            "Vice daemon ready (backend=%s, share_enabled=%s)",
+            self.recorder.name,
+            bool(self.share),
+        )
 
         if self.share:
             asyncio.create_task(
@@ -287,10 +305,39 @@ class ViceDaemon:
                     })
                 )
         else:
-            async with self._clip_lock:
-                click.echo("[Vice] Clip triggered!", err=True)
-                audio.play_clip()
-                await self.recorder.save_clip()
+            if self._clip_task and not self._clip_task.done():
+                log.info("Clip save already in progress; ignoring new trigger")
+                return
+            self._clip_task = asyncio.create_task(self._save_clip())
+            self._clip_task.add_done_callback(self._clip_task_done)
+
+    async def _save_clip(self) -> None:
+        async with self._clip_lock:
+            click.echo("[Vice] Clip triggered!", err=True)
+            if self.share:
+                await self.share.broadcast({"type": "clip_saving"})
+            audio.play_clip()
+            saved = await self.recorder.save_clip()
+            if saved is None and self.share:
+                await self.share.broadcast({
+                    "type": "clip_error",
+                    "error": "Clip save failed. Check vice.log for details.",
+                })
+
+    def _clip_task_done(self, task: asyncio.Task) -> None:
+        if self._clip_task is task:
+            self._clip_task = None
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            log.exception("Clip save task failed")
+            if self.share:
+                asyncio.create_task(self.share.broadcast({
+                    "type": "clip_error",
+                    "error": "Clip save failed. Check vice.log for details.",
+                }))
 
     async def _handle_session_toggle(self) -> None:
         if self._session_active:
@@ -491,6 +538,20 @@ def _refresh_desktop_caches() -> None:
         subprocess.run([exe, *cmd[1:]], capture_output=True)
 
 
+def _setup_daemon_logging(debug: bool) -> None:
+    DAEMON_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handlers: list[logging.Handler] = [logging.FileHandler(DAEMON_LOG_FILE)]
+    if sys.stderr.isatty():
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+        handlers=handlers,
+        force=True,
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────────────────────────────────────
@@ -511,11 +572,7 @@ def cli(ctx: click.Context) -> None:
               help="Open the web UI in the browser on start.")
 def start(debug: bool, open_ui: bool) -> None:
     """Start the Vice recording daemon."""
-    logging.basicConfig(
-        level=logging.DEBUG if debug else logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    _setup_daemon_logging(debug)
 
     if SOCKET_FILE.exists():
         resp = asyncio.run(_ipc("status", timeout=1.5))
