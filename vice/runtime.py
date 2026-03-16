@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import pwd
 import shutil
+import stat
 import subprocess
 from pathlib import Path
+
+log = logging.getLogger("vice.runtime")
 
 
 def actual_home_dir() -> Path:
@@ -49,6 +53,53 @@ def load_user_systemd_env() -> None:
             os.environ[key] = value
 
 
+def _wayland_runtime_dir_candidates() -> list[Path]:
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    for raw_path in (runtime_dir, f"/run/user/{os.getuid()}"):
+        if not raw_path or _needs_shell_expansion(raw_path):
+            continue
+        candidate = Path(raw_path)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        candidates.append(candidate)
+
+    return candidates
+
+
+def recover_wayland_display() -> bool:
+    """Recover Wayland env vars from a socket when launchers omit them."""
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return True
+
+    for runtime_dir in _wayland_runtime_dir_candidates():
+        if not runtime_dir.exists():
+            continue
+
+        for candidate in sorted(runtime_dir.glob("wayland-*")):
+            try:
+                mode = candidate.stat().st_mode
+            except OSError:
+                continue
+
+            if not stat.S_ISSOCK(mode):
+                continue
+
+            os.environ["WAYLAND_DISPLAY"] = candidate.name
+            os.environ["XDG_RUNTIME_DIR"] = str(runtime_dir)
+            log.info(
+                "Recovered Wayland display from socket: %s/%s",
+                runtime_dir,
+                candidate.name,
+            )
+            return True
+
+    return False
+
+
 def normalize_runtime_environment() -> None:
     """Repair common broken service env vars before Vice touches config or capture."""
     real_home = str(actual_home_dir())
@@ -71,6 +122,9 @@ def normalize_runtime_environment() -> None:
 
     if _needs_shell_expansion(os.environ.get("XDG_RUNTIME_DIR")):
         os.environ["XDG_RUNTIME_DIR"] = runtime_dir
+
+    if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
+        recover_wayland_display()
 
 
 def resolve_path(path_like: str | Path) -> Path:

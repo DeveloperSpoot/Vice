@@ -332,8 +332,6 @@ Type=simple
 ExecStart=${VICE_BIN} start --no-open-ui
 Restart=on-failure
 RestartSec=3
-Environment=HOME=${HOME}
-Environment=XDG_RUNTIME_DIR=/run/user/$(id -u)
 Environment=PATH=${USER_BIN}:/usr/local/bin:/usr/bin:/bin
 
 [Install]

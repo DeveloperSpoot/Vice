@@ -33,7 +33,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from .runtime import actual_home_dir, load_user_systemd_env, normalize_runtime_environment
+from .runtime import actual_home_dir, normalize_runtime_environment
 
 SOCKET_FILE = Path("/tmp/vice/vice.sock")
 WINDOW_TITLE = "Vice"
@@ -115,7 +115,6 @@ def _daemon_responds(timeout: float = 1.0) -> bool:
 def _start_daemon() -> None:
     """Launch the daemon as a detached background process (no-op if running)."""
     normalize_runtime_environment()
-    load_user_systemd_env()
 
     if SOCKET_FILE.exists():
         if _daemon_responds():
@@ -132,6 +131,7 @@ def _start_daemon() -> None:
     try:
         subprocess.Popen(
             cmd,
+            env=os.environ.copy(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,   # detach from our process group

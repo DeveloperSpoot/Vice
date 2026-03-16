@@ -1,17 +1,20 @@
 import asyncio
 import os
 import socket
+import stat
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from vice import app as app_mod
 from vice import config as config_mod
 from vice.config import Config, OutputConfig, RecordingConfig, SharingConfig
 from vice.recorder import (
     GSRRecorder,
     SegmentRecorder,
+    _is_wayland,
     create_recorder,
     list_display_options,
     _wait_for_finalized_clip,
@@ -61,6 +64,65 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             self.assertEqual(os.environ["HOME"], str(actual_home_dir()))
             self.assertEqual(os.environ["WAYLAND_DISPLAY"], "wayland-1")
             self.assertEqual(os.environ["XDG_RUNTIME_DIR"], f"/run/user/{os.getuid()}")
+
+    def test_normalize_runtime_environment_recovers_wayland_socket_without_systemd(self) -> None:
+        runtime_dir = mock.MagicMock()
+        runtime_dir.exists.return_value = True
+        runtime_dir.__str__.return_value = "/tmp/vice-runtime"
+        candidate = mock.MagicMock()
+        candidate.name = "wayland-9"
+        candidate.stat.return_value = mock.Mock(st_mode=stat.S_IFSOCK)
+        runtime_dir.glob.return_value = [candidate]
+
+        with mock.patch.dict(
+            os.environ,
+            {"HOME": "${HOME}", "XDG_RUNTIME_DIR": "/run/user/$(id -u)"},
+            clear=True,
+        ):
+            with mock.patch("vice.runtime.shutil.which", return_value=None):
+                with mock.patch(
+                    "vice.runtime._wayland_runtime_dir_candidates",
+                    return_value=[runtime_dir],
+                ):
+                    normalize_runtime_environment()
+            self.assertEqual(os.environ["HOME"], str(actual_home_dir()))
+            self.assertEqual(os.environ["WAYLAND_DISPLAY"], "wayland-9")
+            self.assertEqual(os.environ["XDG_RUNTIME_DIR"], "/tmp/vice-runtime")
+
+    def test_normalize_runtime_environment_leaves_display_unset_without_socket(self) -> None:
+        runtime_dir = mock.MagicMock()
+        runtime_dir.exists.return_value = True
+        runtime_dir.glob.return_value = []
+
+        with mock.patch.dict(os.environ, {"HOME": "${HOME}"}, clear=True):
+            with mock.patch("vice.runtime.shutil.which", return_value=None):
+                with mock.patch(
+                    "vice.runtime._wayland_runtime_dir_candidates",
+                    return_value=[runtime_dir],
+                ):
+                    normalize_runtime_environment()
+            self.assertEqual(os.environ["HOME"], str(actual_home_dir()))
+            self.assertNotIn("WAYLAND_DISPLAY", os.environ)
+            self.assertNotIn("DISPLAY", os.environ)
+            self.assertEqual(os.environ["XDG_RUNTIME_DIR"], f"/run/user/{os.getuid()}")
+
+
+class AppStartupTests(unittest.TestCase):
+    def test_start_daemon_passes_normalized_environment_to_child(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "vice.sock"
+            with mock.patch.object(app_mod, "SOCKET_FILE", socket_path):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    with mock.patch("vice.app._vice_cmd", return_value=["vice"]):
+                        with mock.patch(
+                            "vice.app.normalize_runtime_environment",
+                            side_effect=lambda: os.environ.__setitem__("WAYLAND_DISPLAY", "wayland-7"),
+                        ) as normalize_mock:
+                            with mock.patch("vice.app.subprocess.Popen") as popen_mock:
+                                app_mod._start_daemon()
+
+        normalize_mock.assert_called_once()
+        self.assertEqual(popen_mock.call_args.kwargs["env"]["WAYLAND_DISPLAY"], "wayland-7")
 
 
 class ConfigPathResolutionTests(unittest.TestCase):
@@ -117,7 +179,6 @@ class ShareServerPathResolutionTests(unittest.IsolatedAsyncioTestCase):
             public_port = _free_port()
             while public_port == local_port:
                 public_port = _free_port()
-
             cfg = Config(
                 output=OutputConfig(directory="$HOME/Videos/Vice"),
                 sharing=SharingConfig(
@@ -136,6 +197,14 @@ class ShareServerPathResolutionTests(unittest.IsolatedAsyncioTestCase):
                             self.assertIn("clip", server._clips)
                         finally:
                             await server.stop()
+
+
+class RecorderEnvironmentTests(unittest.TestCase):
+    def test_is_wayland_delegates_to_runtime_recovery(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("vice.recorder.recover_wayland_display", return_value=True) as recover_mock:
+                self.assertTrue(_is_wayland())
+        recover_mock.assert_called_once()
 
 
 class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):

@@ -24,7 +24,6 @@ import re
 import shlex
 import shutil
 import signal
-import stat
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -33,7 +32,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .config import Config
-from .runtime import resolve_path
+from .runtime import recover_wayland_display, resolve_path
 
 log = logging.getLogger("vice.recorder")
 
@@ -42,32 +41,7 @@ log = logging.getLogger("vice.recorder")
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _is_wayland() -> bool:
-    if os.environ.get("WAYLAND_DISPLAY"):
-        return True
-
-    runtime_dir = Path(
-        os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    )
-    if not runtime_dir.exists():
-        return False
-
-    for candidate in sorted(runtime_dir.glob("wayland-*")):
-        try:
-            mode = candidate.stat().st_mode
-        except OSError:
-            continue
-
-        if stat.S_ISSOCK(mode):
-            os.environ["WAYLAND_DISPLAY"] = candidate.name
-            os.environ.setdefault("XDG_RUNTIME_DIR", str(runtime_dir))
-            log.info(
-                "Detected Wayland socket fallback: %s/%s",
-                runtime_dir,
-                candidate.name,
-            )
-            return True
-
-    return False
+    return recover_wayland_display()
 
 
 def _is_x11() -> bool:

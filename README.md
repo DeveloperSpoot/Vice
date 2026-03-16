@@ -213,7 +213,8 @@ base_url          = "https://clips.example.com"   # optional public share origin
 
 **Vice fails only from a manual `systemd --user` service**
 > Do not use shell syntax like `Environment=HOME=${HOME}` or `Environment=XDG_RUNTIME_DIR=/run/user/$(id -u)` in the unit file.
-> `systemd` does not evaluate those expressions there. Use concrete values or omit those overrides entirely.
+> `systemd` does not evaluate those expressions there. Omit those overrides unless you need them, or use concrete values only.
+> Recent Vice builds also recover `WAYLAND_DISPLAY` from a live Wayland socket when launcher contexts omit it, but invalid unit-file env overrides can still break startup.
 
 ### Uninstall
 
