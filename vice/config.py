@@ -81,8 +81,6 @@ class SharingConfig:
     cloudflare_tunnel: bool = True
     # Override the public base URL shown in share links (e.g. if behind reverse proxy).
     base_url: Optional[str] = None
-    # Theme color for embeded links. Default is blue.
-    theme_color: str = '#3b82f6'
 
 
 @dataclass
