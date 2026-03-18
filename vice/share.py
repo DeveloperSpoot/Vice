@@ -207,7 +207,7 @@ class ShareServer:
         self._public_runner: Optional[web.AppRunner] = None
         self._public_site: Optional[web.TCPSite] = None
         self._legacy_public_site: Optional[web.TCPSite] = None
-        self._theme: str
+        self._theme: str = "blue"
 
         # slug → Path  (populated from disk on start + runtime additions)
         self._clips: dict[str, Path] = {}
