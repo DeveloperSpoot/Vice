@@ -90,7 +90,6 @@ class ViceDaemon:
             self.share.trigger_clip_cb = self._handle_clip_hotkey
             self.share.get_status_cb   = self._get_status
             self.share.apply_config_cb = self._apply_live_config
-            self.share._theme = self.cfg.sharing.theme_color
             try:
                 await self.share.start()
             except Exception:
