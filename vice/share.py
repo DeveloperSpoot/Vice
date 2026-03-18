@@ -156,6 +156,13 @@ async def _make_thumb(path: Path) -> Path:
         pass
     return thumb
 
+_THEMES = {
+    "blue":  '#3b82f6',
+    "purple": '#8b5cf6',
+    "green":  '#10b981',
+    "red":    '#ef4444', 
+    "orange": '#f97316'
+    }
 
 _EMBED_PAGE = """\
 <!DOCTYPE html>
@@ -174,6 +181,7 @@ _EMBED_PAGE = """\
   <meta name="twitter:player"           content="{video_url}">
   <meta name="twitter:player:width"     content="{width}">
   <meta name="twitter:player:height"    content="{height}">
+  <meta name="theme-color"              content="{theme}">
   <title>{title}</title>
   <style>
     body{{margin:0;background:#000;display:flex;align-items:center;
@@ -199,6 +207,7 @@ class ShareServer:
         self._public_runner: Optional[web.AppRunner] = None
         self._public_site: Optional[web.TCPSite] = None
         self._legacy_public_site: Optional[web.TCPSite] = None
+        self._theme: str
 
         # slug → Path  (populated from disk on start + runtime additions)
         self._clips: dict[str, Path] = {}
@@ -442,7 +451,10 @@ class ShareServer:
             thumb_url=f"{base}/t/{slug}",
             width=meta.get("width", 1920),
             height=meta.get("height", 1080),
+            theme=_THEMES[self._theme]
         )
+        
+        
         return web.Response(text=html, content_type="text/html")
 
     async def _video(self, req: web.Request) -> web.Response:
