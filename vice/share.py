@@ -181,7 +181,7 @@ _EMBED_PAGE = """\
   <meta name="twitter:player"           content="{video_url}">
   <meta name="twitter:player:width"     content="{width}">
   <meta name="twitter:player:height"    content="{height}">
-  <meta name="theme_color"              content="{theme}">
+  <meta name="theme-color"              content="{theme}">
   <title>{title}</title>
   <style>
     body{{margin:0;background:#000;display:flex;align-items:center;
