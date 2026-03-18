@@ -207,6 +207,7 @@ class ShareServer:
         self._public_runner: Optional[web.AppRunner] = None
         self._public_site: Optional[web.TCPSite] = None
         self._legacy_public_site: Optional[web.TCPSite] = None
+        self._theme: str
 
         # slug → Path  (populated from disk on start + runtime additions)
         self._clips: dict[str, Path] = {}
@@ -450,8 +451,10 @@ class ShareServer:
             thumb_url=f"{base}/t/{slug}",
             width=meta.get("width", 1920),
             height=meta.get("height", 1080),
-            theme=_THEMES[self.cfg.share.theme_color]
+            theme=_THEMES[self._theme]
         )
+        
+        
         return web.Response(text=html, content_type="text/html")
 
     async def _video(self, req: web.Request) -> web.Response:
